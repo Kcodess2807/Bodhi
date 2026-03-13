@@ -24,4 +24,5 @@ class InterviewState(TypedDict):
     difficulty_level: int         # 1-5
     phase_scores: dict            # {"behavioral": {"score": 4, "questions": 3}, ...}
     entity_context: str           # company info loaded from Redis/Neon at session start
+    suggested_topics: str         # soft guidance from uploaded documents (cached in Redis)
     should_end: bool

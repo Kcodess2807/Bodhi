@@ -1,28 +1,51 @@
 # Bodhi
 
-A voice-first, low-latency AI Mock Interviewer. Bodhi conducts structured mock interviews entirely by voice — you speak, it listens, responds, and adapts. No frontend required; runs from the terminal.
+A voice-first, low-latency AI Mock Interviewer. Bodhi conducts structured mock interviews entirely by voice — you speak, it listens, responds, and adapts. Available as both a CLI voice loop and a full FastAPI HTTP server.
 
 ---
 
 ## What It Can Do Right Now
 
-Bodhi is a fully working CLI voice interview system. Here's what happens when you run it:
+### CLI Voice Loop
 
-1. **You launch `python -m src.main`** — Bodhi connects to NeonDB and Redis (if configured), loads any entity context for the target company, and starts the interview.
+1. **Launch `python -m src.main`** — Bodhi connects to NeonDB and Redis (if configured), loads entity context and suggested topics, and starts the interview.
 2. **Bodhi introduces itself** and asks the first behavioral question (TTS via Bulbul V3, played through your speakers).
 3. **You answer by speaking** — the mic listens hands-free using VAD. No buttons, no Enter key. Talk for as long as you need (up to 2 minutes per answer). When you pause for ~1.5 seconds, recording stops automatically.
 4. **Your speech is transcribed** to English text (Saaras V3 STT). Long answers (>25s) are auto-chunked to stay within API limits.
 5. **Bodhi thinks and responds** — LangGraph orchestrates the interview flow. Gemini generates a context-aware follow-up, probing deeper or transitioning phases.
 6. **The response is spoken aloud** (Bulbul V3 TTS) and the cycle repeats.
 7. **Bodhi autonomously progresses** through interview phases: `intro → behavioral → technical → coding → wrapup`, using LangGraph tools to transition, score answers, and adjust difficulty.
-8. **Session data is persisted** — transcripts, phase scores, and session records are saved to NeonDB on phase transitions and session end. Entity context is cached in Redis for sub-millisecond lookups.
+8. **Session data is persisted** — transcripts, phase scores, and session records are saved to NeonDB. Entity context and suggested topics are cached in Redis.
+
+### FastAPI Server
+
+A full HTTP API that exposes all functionality over REST:
+
+- **Role Profiles** — CRUD for predefined interview roles (e.g., "Backend Engineer", "Data Scientist") with focus areas and typical topics.
+- **Company Profiles** — Manage company+role metadata (tech stack, hiring patterns).
+- **Document Upload** — Upload PDF, DOCX, or TXT interview prep materials. Text is extracted, chunked, embedded, and stored in pgvector. Gemini extracts 10-15 suggested interview topics and caches them in Redis.
+- **RAG Search** — Semantic search across ingested documents with role-only + company-specific merging.
+- **Interview Sessions** — Start/message/end interviews over HTTP with STT+LLM+TTS in a single request.
+- **Audio Utilities** — Standalone STT and TTS endpoints.
+
+### Role Profile Hierarchy
+
+Roles have their own general profiles independent of companies. When an interview specifies both a company and a role, Bodhi merges:
+1. **Role-only general docs** (company='general', role=X) — universal knowledge for that role
+2. **Company-specific docs** (company=Y, role=X) — company-tailored context
+
+If no company is given, only role-level context is used.
+
+### Suggested Topics (Soft Guidance)
+
+When documents are uploaded, Gemini extracts broader interview topics and caches them in Redis. These are included in the system prompt as **soft guidance** — areas worth exploring — but do NOT dictate the interview flow. The bot still asks questions reactively based on how the candidate answers.
 
 ### Current Limitations
 
-- CLI only — no web frontend yet.
 - English-only STT (Hinglish/Hindi planned for later).
 - No code editor integration yet (Monaco planned for Phase 2).
 - No resume/JD parsing yet.
+- Interview API uses synchronous request-response; WebSocket streaming is a future optimization.
 
 ---
 
@@ -31,14 +54,18 @@ Bodhi is a fully working CLI voice interview system. Here's what happens when yo
 | Layer | Technology | Role |
 | --- | --- | --- |
 | **Language** | Python 3.11+ | Backend runtime |
+| **API Framework** | FastAPI + Uvicorn | HTTP server with auto-generated OpenAPI docs |
 | **AI Orchestration** | LangGraph + LangChain | Stateful interview graph, tool invocation, conditional routing |
 | **LLM** | Google Gemini (`gemini-3.1-flash-lite-preview`) | Conversational AI via `ChatGoogleGenerativeAI` |
+| **Embeddings** | Google `text-embedding-004` | 768-dim vectors for RAG via pgvector |
 | **STT** | Sarvam AI Saaras V3 | Speech-to-text (`mode="transcribe"`, `language_code="en-IN"`) |
 | **TTS** | Sarvam AI Bulbul V3 | Text-to-speech (speaker `shubh`) |
-| **Audio** | `sounddevice` + `webrtcvad` + `soundfile` | Mic capture, VAD, audio I/O |
+| **Audio** | `sounddevice` + `webrtcvad` + `soundfile` | Mic capture, VAD, audio I/O (CLI only) |
+| **Doc Parsing** | PyPDF2 + python-docx | PDF and DOCX text extraction for document upload |
 | **Edge State** | LangGraph `MemorySaver` | Zero-latency in-process checkpointing |
-| **Cache** | Redis (`redis-py`) | Sub-ms session snapshots and entity context |
-| **Persistent Storage** | NeonDB PostgreSQL (`psycopg2`) | Sessions, transcripts, phase results, entity knowledge |
+| **Cache** | Redis (`redis-py`) | Sub-ms session snapshots, entity context, suggested topics (24h TTL) |
+| **Persistent Storage** | NeonDB PostgreSQL (`psycopg2`) | Sessions, transcripts, phase results, entity knowledge, role profiles |
+| **Vector Store** | pgvector on NeonDB | Cosine-similarity search for RAG |
 
 ---
 
@@ -47,14 +74,16 @@ Bodhi is a fully working CLI voice interview system. Here's what happens when yo
 | Variable | Required | Description |
 | --- | --- | --- |
 | `SARVAM_API_KEY` | Yes | Sarvam AI key for Saaras (STT) and Bulbul (TTS) |
-| `GOOGLE_API_KEY` | Yes | Google Gemini API key |
-| `DATABASE_URL` | No | NeonDB PostgreSQL connection string. If unset, persistence is skipped. |
-| `REDIS_URL` | No | Redis connection (default `redis://localhost:6379`). If unreachable, caching is skipped. |
+| `GOOGLE_API_KEY` | Yes | Google Gemini API key (LLM + embeddings) |
+| `DATABASE_URL` | API: Yes, CLI: No | NeonDB PostgreSQL connection string |
+| `REDIS_URL` | No | Redis connection (default `redis://localhost:6379`) |
 | `BODHI_VOICE_MODE` | No | `natural` (default, VAD-based) or `manual` (Enter-to-record) |
-| `BODHI_INPUT_DEVICE` | No | Microphone device index. Run `list_input_devices` to find yours. |
-| `BODHI_CANDIDATE` | No | Candidate name for the session |
+| `BODHI_INPUT_DEVICE` | No | Microphone device index for CLI |
+| `BODHI_CANDIDATE` | No | Candidate name for the CLI session |
 | `BODHI_COMPANY` | No | Target company (prompted at startup if unset) |
 | `BODHI_ROLE` | No | Target role (default: `Software Engineer`) |
+| `BODHI_HOST` | No | FastAPI host (default: `0.0.0.0`) |
+| `BODHI_PORT` | No | FastAPI port (default: `8000`) |
 
 ---
 
@@ -75,18 +104,68 @@ pip install -r requirements.txt
 # 4. Create .env with your API keys (copy from .env.example)
 #    SARVAM_API_KEY=...
 #    GOOGLE_API_KEY=...
-#    DATABASE_URL=...          # optional (NeonDB)
+#    DATABASE_URL=...          # required for API server
 #    REDIS_URL=...             # optional
 
-# 5. (Optional) Find your microphone device index
-python -c "from src.audio import list_input_devices; list_input_devices()"
-# Set BODHI_INPUT_DEVICE in .env to the index of your preferred mic
+# 5. Run the FastAPI server
+uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8000
+# Open http://localhost:8000/docs for interactive API docs
 
-# 6. Run the interview
+# 6. Or run the CLI voice loop
 python -m src.main
 ```
 
-On startup, Bodhi connects to Redis and NeonDB (if configured), prompts for a target company, and begins the mock interview. Just speak naturally — Ctrl+C to exit.
+---
+
+## API Endpoints
+
+Once the server is running, full interactive docs are available at `/docs` (Swagger) and `/redoc`.
+
+### Roles (`/api/roles`)
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/roles` | Create a role profile |
+| `GET` | `/api/roles` | List all roles |
+| `GET` | `/api/roles/{role_name}` | Get one role |
+| `PUT` | `/api/roles/{role_name}` | Update a role |
+| `DELETE` | `/api/roles/{role_name}` | Delete a role |
+
+### Companies (`/api/companies`)
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/companies` | Create/update company+role profile |
+| `GET` | `/api/companies` | List all company profiles |
+| `GET` | `/api/companies/{name}` | Get profiles for a company |
+| `DELETE` | `/api/companies/{name}/{role}` | Delete a company+role profile |
+
+### Documents (`/api/documents`)
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/documents/ingest` | Ingest plain text into RAG |
+| `POST` | `/api/documents/upload` | Upload PDF/DOCX/TXT file — extracts text, ingests, and caches topics |
+| `GET` | `/api/documents/search` | Semantic search across ingested documents |
+| `GET` | `/api/documents/context` | Get assembled RAG context string |
+| `GET` | `/api/documents/topics` | Get cached suggested interview topics |
+
+### Interviews (`/api/interviews`)
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/interviews` | Start a new session (returns greeting + audio) |
+| `POST` | `/api/interviews/{id}/message` | Send text, get reply + audio |
+| `POST` | `/api/interviews/{id}/audio` | Upload WAV audio, get STT + reply + audio |
+| `GET` | `/api/interviews/{id}` | Get current session state |
+| `POST` | `/api/interviews/{id}/end` | End session, flush data, trigger RAG contribution |
+
+### Audio (`/api/audio`)
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/audio/stt` | Standalone speech-to-text |
+| `POST` | `/api/audio/tts` | Standalone text-to-speech |
 
 ---
 
@@ -100,28 +179,26 @@ Mic → VAD → Record → STT (Saaras V3) → LangGraph (Gemini) → TTS (Bulbu
 
 - **Persistent `sounddevice.InputStream`** streams 20ms audio frames (16kHz, mono, 16-bit).
 - **`webrtcvad`** (aggressiveness 3) classifies each frame as speech or silence.
-- **Energy gate**: Frames with RMS amplitude below threshold (80) are forced to "not speech" regardless of VAD — prevents microphone noise floor from being classified as speech.
-- **Speech confirmation**: 5 consecutive speech-positive frames (~100ms) required before recording starts. Isolated noise is ignored.
-- **Pre-buffer** (600ms): Captures audio just before speech onset so the beginning of your sentence is never lost.
+- **Energy gate**: Frames with RMS amplitude below threshold (80) are forced to "not speech" — prevents microphone noise floor from being classified as speech.
+- **Speech confirmation**: 5 consecutive speech-positive frames (~100ms) required before recording starts.
+- **Pre-buffer** (600ms): Captures audio just before speech onset.
 - **Silence cutoff**: Recording stops after 1.5 seconds of continuous silence.
 - **Max duration**: 120 seconds (2 minutes) safety cap per utterance.
-- **Manual fallback**: Set `BODHI_VOICE_MODE=manual` to use Enter-to-record if your environment is too noisy.
+- **Manual fallback**: Set `BODHI_VOICE_MODE=manual` for Enter-to-record.
 
 ### STT (Auto-Chunking)
 
-Sarvam's API has a 30-second limit per request. For long answers, the audio is automatically split into <=25-second chunks, each transcribed separately, and results joined.
+Sarvam's API has a 30-second limit per request. Long answers are automatically split into <=25-second chunks, each transcribed separately, and results joined.
 
 ### Error Recovery
 
 - **3 consecutive mic errors** → app exits with a message to check device connection.
 - **Ctrl+C** → session data is flushed to NeonDB/Redis before exiting.
-- **Redis/NeonDB unavailable** → system continues with in-memory state only.
+- **Redis/NeonDB unavailable** → CLI continues with in-memory state only.
 
 ---
 
 ## Interview Orchestration (LangGraph)
-
-The interview is modeled as a **LangGraph StateGraph** with the following structure:
 
 ### Phases
 
@@ -134,25 +211,24 @@ The LLM decides when to transition phases using LangGraph tools.
 | Tool | What It Does |
 | --- | --- |
 | `transition_phase` | Move to the next interview phase |
-| `score_answer` | Score the candidate's answer (1-10) with reasoning |
+| `score_answer` | Score the candidate's answer (1-5) with reasoning |
 | `adjust_difficulty` | Raise or lower question difficulty (1-5 scale) |
 | `end_interview` | Conclude the interview and trigger session flush |
 
 ### State Management
 
-- **`InterviewState`** (TypedDict): Tracks messages, session ID, candidate info, current phase, difficulty level, phase scores, entity context, and end flag.
+- **`InterviewState`** (TypedDict): Tracks messages, session ID, candidate info, current phase, difficulty level, phase scores, entity context, suggested topics, and end flag.
 - **`MemorySaver`**: In-process checkpointing — zero I/O on the voice loop hot path.
 - **Phase-aware system prompts**: The HR persona ("Bodhi") adapts behavior per phase — STAR-method probing in behavioral, difficulty scaling in technical, hints-not-answers in coding.
+- **Suggested topics**: Soft guidance from uploaded documents — explored naturally, never dictating the flow.
 
 ### Three-Tier Storage
 
 | Tier | Technology | Latency | Purpose |
 | --- | --- | --- | --- |
 | **Edge** | `MemorySaver` | 0ms | Full state in RAM during session |
-| **Cache** | Redis | <1ms | Session snapshots, entity context |
-| **Persistent** | NeonDB PostgreSQL | ~50ms | Sessions, transcripts, phase results, entity knowledge base |
-
-Data flows down: edge → cache → DB. Written asynchronously on phase transitions and session end.
+| **Cache** | Redis | <1ms | Session snapshots, entity context, suggested topics |
+| **Persistent** | NeonDB PostgreSQL | ~50ms | Sessions, transcripts, phase results, entity knowledge, role profiles, vector store |
 
 ---
 
@@ -162,22 +238,36 @@ Data flows down: edge → cache → DB. Written asynchronously on phase transiti
 Bodhi/
 ├── src/
 │   ├── __init__.py
-│   ├── main.py            # Entry point — session lifecycle, graph invocation
-│   ├── audio.py           # Mic recording (VAD), playback
-│   ├── state.py           # InterviewState TypedDict, phase definitions
-│   ├── prompts.py         # Phase-aware HR interviewer system prompts
-│   ├── tools.py           # LangGraph tools (transition, score, difficulty, end)
-│   ├── graph.py           # StateGraph construction and compilation
-│   ├── cache.py           # Redis cache layer (BodhiCache)
-│   ├── storage.py         # NeonDB persistence layer (BodhiStorage)
+│   ├── main.py              # CLI entry point — session lifecycle, graph invocation
+│   ├── audio.py             # Mic recording (VAD), playback
+│   ├── state.py             # InterviewState TypedDict, phase definitions
+│   ├── prompts.py           # Phase-aware HR interviewer system prompts
+│   ├── tools.py             # LangGraph tools (transition, score, difficulty, end)
+│   ├── graph.py             # StateGraph construction and compilation
+│   ├── cache.py             # Redis cache layer (BodhiCache)
+│   ├── storage.py           # NeonDB persistence layer (BodhiStorage)
+│   ├── rag.py               # RAG: chunking, embedding, ingestion, retrieval, topic extraction
+│   ├── embeddings.py        # Google text-embedding-004 wrapper
+│   ├── document_parser.py   # PDF/DOCX/TXT text extraction
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── app.py           # FastAPI app, lifespan, CORS
+│   │   ├── deps.py          # Dependency injection (storage, cache, graph)
+│   │   ├── models.py        # Pydantic request/response schemas
+│   │   ├── roles.py         # /api/roles CRUD
+│   │   ├── companies.py     # /api/companies CRUD
+│   │   ├── documents.py     # /api/documents ingest + upload + search
+│   │   ├── interviews.py    # /api/interviews session lifecycle
+│   │   └── audio.py         # /api/audio STT + TTS utilities
 │   └── services/
-│       ├── llm.py         # Gemini LLM setup via LangChain
-│       ├── stt.py         # Saaras V3 STT (with auto-chunking)
-│       └── tts.py         # Bulbul V3 TTS
+│       ├── llm.py           # Gemini LLM setup via LangChain
+│       ├── stt.py           # Saaras V3 STT (with auto-chunking)
+│       └── tts.py           # Bulbul V3 TTS
+├── ingest_docs.py           # Legacy CLI ingestion tool (use API instead)
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore
-├── TECHNICAL.md           # Internal architecture docs (gitignored)
+├── TECHNICAL.md             # Internal architecture docs (gitignored)
 └── README.md
 ```
 
@@ -192,14 +282,18 @@ Bodhi/
 - [x] Phase 1: LangGraph interview orchestration (phases, tools, scoring)
 - [x] Three-tier storage (MemorySaver + Redis + NeonDB)
 - [x] HR persona with phase-aware system prompts
-- [x] Graceful degradation (Redis/NeonDB optional)
+- [x] Graceful degradation (Redis/NeonDB optional for CLI)
 - [x] Error recovery (consecutive mic failures, Ctrl+C flush)
+- [x] RAG pipeline with pgvector (company + role document ingestion and retrieval)
+- [x] Role profiles with general/company-specific hierarchy
+- [x] FastAPI server with full REST API (roles, companies, documents, interviews, audio)
+- [x] Document upload (PDF/DOCX/TXT) with text extraction and topic caching
+- [x] Suggested interview topics from uploaded materials (Redis-cached, soft guidance)
 
 ### Next
 
-- [ ] Phase 2: FastAPI server + WebSocket streaming for real-time STT/TTS
+- [ ] WebSocket streaming for real-time STT/TTS (lower latency than REST)
 - [ ] Monaco code editor integration for coding rounds
-- [ ] RAG pipeline with vector search for entity knowledge
 - [ ] Resume/JD parsing and gap analysis ("Question Doctor")
 - [ ] Hinglish/Hindi language support (STT + TTS)
 - [ ] Post-interview analytics and performance heatmap

@@ -53,17 +53,27 @@ def _init_cache():
         return None
 
 
-def _load_entity_context(company: str, cache, storage) -> str:
-    """Load company context: Redis (fast) -> NeonDB (fallback) -> empty."""
+def _load_entity_context(company: str, role: str, cache, storage) -> str:
+    """Load company context: Redis RAG cache -> pgvector RAG -> flat entity -> empty."""
     if not company:
         return ""
 
     if cache:
-        cached = cache.get_entity(company)
+        cached = cache.get_rag_context(company, role)
         if cached:
             return cached
 
     if storage:
+        try:
+            from src.rag import retrieve_context
+            rag_ctx = retrieve_context(company, role, storage)
+            if rag_ctx:
+                if cache:
+                    cache.set_rag_context(company, role, rag_ctx)
+                return rag_ctx
+        except Exception as e:
+            print(f"  [rag] Retrieval failed: {e} — falling back to flat entity.")
+
         entity = storage.get_entity(company)
         if entity:
             ctx = (
@@ -72,14 +82,15 @@ def _load_entity_context(company: str, cache, storage) -> str:
                 f"Tech: {entity.get('tech_stack', '')}"
             ).strip()
             if cache and ctx:
-                cache.set_entity(company, ctx)
+                cache.set_rag_context(company, role, ctx)
             return ctx
 
     return ""
 
 
 def _flush_session(session_id, state, storage, cache):
-    """Flush session data to NeonDB and clean up Redis on session end."""
+    """Flush session data to NeonDB, contribute RAG intel, and clean up Redis."""
+    transcript_text = ""
     if storage:
         try:
             messages = []
@@ -87,6 +98,10 @@ def _flush_session(session_id, state, storage, cache):
                 role = "user" if isinstance(msg, HumanMessage) else "assistant"
                 content = msg.content if hasattr(msg, "content") else str(msg)
                 messages.append({"role": role, "content": _extract_text(content)})
+
+            transcript_text = "\n".join(
+                f"{m['role']}: {m['content']}" for m in messages
+            )
 
             storage.save_transcript_batch(
                 session_id, messages, state.get("current_phase", "unknown"),
@@ -113,6 +128,17 @@ def _flush_session(session_id, state, storage, cache):
             storage.end_session(session_id, overall_score=avg_score)
         except Exception as e:
             print(f"  [storage] Flush error: {e}")
+
+    if storage and transcript_text:
+        try:
+            from src.rag import extract_and_contribute
+            company = state.get("target_company", "")
+            role = state.get("target_role", "")
+            n = extract_and_contribute(company, role, transcript_text, storage)
+            if n:
+                print(f"  [rag] Contributed {n} chunk(s) for {company}/{role}")
+        except Exception as e:
+            print(f"  [rag] Contribution failed: {e}")
 
     if cache:
         try:
@@ -146,9 +172,16 @@ def main() -> None:
     if not target_company:
         target_company = input("Target company (or press Enter to skip): ").strip() or "General"
 
-    entity_context = _load_entity_context(target_company, cache, storage)
+    entity_context = _load_entity_context(target_company, target_role, cache, storage)
     if entity_context:
-        print(f"  [entity] Loaded context for {target_company}")
+        print(f"  [rag] Loaded context for {target_company} / {target_role}")
+
+    suggested_topics = ""
+    if cache:
+        topics_list = cache.get_topics(target_company, target_role)
+        if topics_list:
+            suggested_topics = "\n".join(f"  - {t}" for t in topics_list)
+            print(f"  [topics] Loaded {len(topics_list)} suggested topics")
 
     if storage:
         try:
@@ -168,6 +201,7 @@ def main() -> None:
         "difficulty_level": 3,
         "phase_scores": {},
         "entity_context": entity_context,
+        "suggested_topics": suggested_topics,
         "should_end": False,
     }
 

@@ -79,6 +79,7 @@ def build_system_prompt(
     current_phase: str,
     difficulty_level: int,
     entity_context: str = "",
+    suggested_topics: str = "",
 ) -> str:
     """Assemble the full system prompt from current interview state."""
     phase_instructions = PHASE_INSTRUCTIONS.get(current_phase, "")
@@ -91,6 +92,13 @@ def build_system_prompt(
     entity_block = ""
     if entity_context:
         entity_block = f"- Company Intel: {entity_context}"
+    if suggested_topics:
+        entity_block += (
+            "\n- SUGGESTED TOPICS (from uploaded prep materials — explore "
+            "these naturally based on how the candidate answers, do NOT "
+            "read them as a list or let them dictate the interview flow):\n"
+            f"{suggested_topics}"
+        )
 
     return INTERVIEWER_BASE.format(
         candidate_name=candidate_name,

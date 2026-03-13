@@ -86,6 +86,7 @@ def build_interview_graph(llm):
             current_phase=state["current_phase"],
             difficulty_level=state["difficulty_level"],
             entity_context=state.get("entity_context", ""),
+            suggested_topics=state.get("suggested_topics", ""),
         )
         all_messages = [SystemMessage(content=system)] + list(state["messages"])
         response = model_with_tools.invoke(all_messages)
