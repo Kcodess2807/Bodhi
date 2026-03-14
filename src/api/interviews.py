@@ -91,6 +91,12 @@ def _load_candidate_context(
 
     For standard mode returns empty defaults. Raises HTTPException on missing inputs.
     """
+    # normalise frontend aliases
+    if mode == "mode_a":
+        mode = "option_a"
+    elif mode == "mode_b":
+        mode = "option_b"
+
     if mode == "standard":
         return {}, "", {}
 

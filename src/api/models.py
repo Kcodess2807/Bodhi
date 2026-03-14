@@ -108,7 +108,7 @@ class InterviewStartRequest(BaseModel):
     company: str = "General"
     role: str = "Software Engineer"
     jd_text: str = ""  # Optional job description text for curriculum customization
-    mode: Literal["standard", "option_a", "option_b"] = "standard"
+    mode: Literal["standard", "option_a", "option_b", "mode_a", "mode_b"] = "standard"
     user_id: str | None = None   # required for option_a and option_b
 
 

@@ -8,14 +8,6 @@ venv/
 *.wav
 .cursor
 bodhi.db
-<<<<<<< HEAD
-node_modules
-=======
+node_modules/
 *.md
 *.pt
-yolov8l.pt
-yolov8m.pt
-yolov8n.pt
-yolov8s.pt
-yolov8x.pt
->>>>>>> 0d2845fc7a1fc8b60a21fa2143f30aa059753a93
