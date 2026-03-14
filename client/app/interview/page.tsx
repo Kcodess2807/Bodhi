@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  type InterviewStart,
-  type MessageReply,
   type SessionState,
   type SessionEnd,
-  startInterview,
-  sendAudio,
+  type StreamMeta,
+  startInterviewStream,
+  sendAudioStream,
+  parseStreamHeaders,
   getSession,
   endInterview,
 } from "@/lib/api";
@@ -98,6 +98,123 @@ export default function InterviewPage() {
     []
   );
 
+  /** Play a streaming audio/mpeg response progressively using MediaSource. */
+  const playStreamingAudio = useCallback(
+    (response: Response): Promise<void> => {
+      return new Promise((resolve) => {
+        const reader = response.body?.getReader();
+        if (!reader) {
+          console.warn("[Bodhi] No response body reader available");
+          resolve();
+          return;
+        }
+
+        const mediaSource = new MediaSource();
+        const url = URL.createObjectURL(mediaSource);
+        const audio = new Audio(url);
+
+        let cleanupDone = false;
+        const cleanup = () => {
+          if (cleanupDone) return;
+          cleanupDone = true;
+          console.log("[Bodhi] Audio playback ended/cleaned up");
+          URL.revokeObjectURL(url);
+          resolve();
+        };
+
+        audio.onended = cleanup;
+        audio.onerror = (e) => {
+          console.error("[Bodhi] Audio playback error:", e);
+          cleanup();
+        };
+
+        mediaSource.addEventListener("sourceopen", async () => {
+          console.log("[Bodhi] MediaSource opened, creating SourceBuffer (audio/mpeg)");
+          // Sarvam bulbul model generates MP3 audio
+          const mimeCodec = 'audio/mpeg';
+
+          if (!MediaSource.isTypeSupported(mimeCodec)) {
+            console.error("[Bodhi] Browser does NOT support", mimeCodec);
+            // Fallback: wait for all chunks and play as Blob
+            const allChunks: Uint8Array[] = [];
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) allChunks.push(value as Uint8Array);
+            }
+            const blob = new Blob(allChunks as BlobPart[], { type: "audio/mpeg" });
+            const fallbackUrl = URL.createObjectURL(blob);
+            audio.src = fallbackUrl;
+            audio.play().catch((err) => {
+              console.error("[Bodhi] Fallback audio play() rejected:", err);
+              cleanup();
+            });
+            return;
+          }
+
+          const sourceBuffer = mediaSource.addSourceBuffer(mimeCodec);
+          const queue: Uint8Array[] = [];
+          let isAppending = false;
+          let isStreamDone = false;
+
+          const appendNext = () => {
+            if (isAppending || sourceBuffer.updating) return;
+
+            if (queue.length > 0) {
+              isAppending = true;
+              const chunk = queue.shift()!;
+              try {
+                sourceBuffer.appendBuffer(chunk as unknown as BufferSource);
+              } catch (e) {
+                console.error("[Bodhi] Buffer append error:", e);
+                isAppending = false;
+              }
+            } else if (isStreamDone) {
+              if (mediaSource.readyState === "open") {
+                mediaSource.endOfStream();
+              }
+            }
+          };
+
+          sourceBuffer.addEventListener("updateend", () => {
+            isAppending = false;
+            appendNext();
+          });
+
+          audio.play().catch((err) => {
+            console.error("[Bodhi] Audio play() rejected:", err);
+            cleanup();
+          });
+
+          while (true) {
+            try {
+              const { done, value } = await reader.read();
+              if (done) {
+                isStreamDone = true;
+                appendNext();
+                break;
+              }
+              if (value) {
+                queue.push(value as Uint8Array);
+                appendNext();
+              }
+            } catch (err) {
+              console.error("[Bodhi] Stream read error:", err);
+              if (mediaSource.readyState === "open") {
+                mediaSource.endOfStream("network");
+              }
+              break;
+            }
+          }
+        });
+
+        // Trigger the sourceopen event
+        audio.src = url;
+      });
+    },
+    []
+  );
+
   // ── Mic setup ──────────────────────────────────────────
 
   const initMic = useCallback(async () => {
@@ -141,6 +258,7 @@ export default function InterviewPage() {
 
   const startListening = useCallback(() => {
     setPhase("listening");
+    phaseRef.current = "listening";
     isRecordingRef.current = false;
     samplesRef.current = [];
     silenceStartRef.current = 0;
@@ -201,6 +319,7 @@ export default function InterviewPage() {
 
   const finishRecording = useCallback(async () => {
     setPhase("processing");
+    phaseRef.current = "processing";
     setLevel(0);
 
     const chunks = samplesRef.current;
@@ -222,28 +341,37 @@ export default function InterviewPage() {
     const wavBlob = encodeWav(merged, ctx?.sampleRate ?? 16000);
 
     try {
-      const r: MessageReply = await sendAudio(
+      const res = await sendAudioStream(
         sessionIdRef.current,
         wavBlob,
         "recording.wav"
       );
 
-      if (r.transcript) {
-        setTranscript((prev) => [...prev, { speaker: "user", text: r.transcript }]);
+      if (!res.ok) {
+        const errText = await res.text().catch(() => res.statusText);
+        throw new Error(`${res.status}: ${errText}`);
       }
-      setTranscript((prev) => [
-        ...prev,
-        { speaker: "bodhi", text: r.reply_text, phase: r.phase },
-      ]);
+
+      const meta: StreamMeta = parseStreamHeaders(res);
+
+      if (meta.transcript) {
+        setTranscript((prev) => [...prev, { speaker: "user", text: meta.transcript! }]);
+      }
+      if (meta.text) {
+        setTranscript((prev) => [
+          ...prev,
+          { speaker: "bodhi", text: meta.text!, phase: meta.phase },
+        ]);
+      }
       scrollDown();
 
-      if (r.reply_audio_b64) {
-        setPhase("speaking");
-        await playAudio(r.reply_audio_b64);
-      }
+      setPhase("speaking");
+      phaseRef.current = "speaking";
+      await playStreamingAudio(res);
 
-      if (r.should_end) {
+      if (meta.shouldEnd) {
         setPhase("ended");
+        phaseRef.current = "ended";
         try {
           const end = await endInterview(sessionIdRef.current);
           setSummary(end);
@@ -258,7 +386,7 @@ export default function InterviewPage() {
       setError(String(err));
       startListening();
     }
-  }, [playAudio, cleanupMic, startListening]);
+  }, [playStreamingAudio, cleanupMic, startListening]);
 
   const refreshSession = async () => {
     try {
@@ -273,18 +401,29 @@ export default function InterviewPage() {
     e.preventDefault();
     setError("");
     setPhase("processing");
+    phaseRef.current = "processing";
     try {
       await initMic();
-      const r: InterviewStart = await startInterview(startForm);
-      setSessionId(r.session_id);
-      setTranscript([
-        { speaker: "bodhi", text: r.greeting_text, phase: "intro" },
-      ]);
+      const res = await startInterviewStream(startForm);
 
-      if (r.greeting_audio_b64) {
-        setPhase("speaking");
-        await playAudio(r.greeting_audio_b64);
+      if (!res.ok) {
+        const errText = await res.text().catch(() => res.statusText);
+        throw new Error(`${res.status}: ${errText}`);
       }
+
+      const meta: StreamMeta = parseStreamHeaders(res);
+
+      if (meta.session) {
+        setSessionId(meta.session);
+      }
+      if (meta.text) {
+        setTranscript([
+          { speaker: "bodhi", text: meta.text, phase: "intro" },
+        ]);
+      }
+
+      setPhase("speaking");
+      await playStreamingAudio(res);
 
       refreshSession();
       startListening();

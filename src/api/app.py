@@ -11,6 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
+# Configure logging for Bodhi debug output
+import logging
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("bodhi").setLevel(logging.DEBUG)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -60,6 +65,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "X-Bodhi-Text",
+        "X-Bodhi-Phase",
+        "X-Bodhi-End",
+        "X-Bodhi-Session",
+        "X-Bodhi-Transcript",
+    ],
 )
 
 from src.api.roles import router as roles_router

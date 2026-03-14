@@ -195,3 +195,63 @@ export const getSession = (sessionId: string) =>
 
 export const endInterview = (sessionId: string) =>
   request<SessionEnd>(`/api/interviews/${sessionId}/end`, { method: "POST" });
+
+// ── Streaming endpoints ─────────────────────────────────────────
+
+/** Parsed metadata from streaming response headers. */
+export interface StreamMeta {
+  session?: string;
+  text?: string;
+  transcript?: string;
+  phase?: string;
+  shouldEnd?: boolean;
+}
+
+/** Extract X-Bodhi-* headers from a streaming response, URL-decoding values. */
+export function parseStreamHeaders(res: Response): StreamMeta {
+  const d = (key: string) => {
+    const v = res.headers.get(`X-Bodhi-${key}`);
+    return v ? decodeURIComponent(v) : undefined;
+  };
+  return {
+    session: d("Session"),
+    text: d("Text"),
+    transcript: d("Transcript"),
+    phase: d("Phase"),
+    shouldEnd: d("End") === "true",
+  };
+}
+
+/** Start interview, returning a raw streaming Response (audio/mpeg). */
+export const startInterviewStream = (data: {
+  candidate_name?: string;
+  company?: string;
+  role?: string;
+}) =>
+  fetch(`${BASE}/api/interviews/start-stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+
+/** Send text message and receive streaming audio response. */
+export const sendMessageStream = (sessionId: string, text: string) =>
+  fetch(`${BASE}/api/interviews/${sessionId}/message-stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+
+/** Send audio blob and receive streaming audio response. */
+export const sendAudioStream = (
+  sessionId: string,
+  blob: Blob,
+  filename = "audio.webm"
+) => {
+  const form = new FormData();
+  form.append("file", blob, filename);
+  return fetch(`${BASE}/api/interviews/${sessionId}/audio-stream`, {
+    method: "POST",
+    body: form,
+  });
+};

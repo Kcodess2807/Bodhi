@@ -5,8 +5,10 @@ from __future__ import annotations
 import base64
 import os
 import uuid
+import urllib.parse
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 
 from langchain_core.messages import HumanMessage
 
@@ -415,3 +417,237 @@ def _flush_session_sync(
             pass
 
     return summary, overall_score
+
+
+# ── Streaming endpoints ───────────────────────────────────────────
+
+
+async def _tts_stream_generator(text: str, sarvam_key: str):
+    """Yield MP3 audio chunks from TTS streaming."""
+    import logging
+    log = logging.getLogger("bodhi.api.stream")
+
+    log.info("Starting TTS stream for %d chars of text", len(text))
+    from src.services.tts import text_to_speech_stream
+    chunk_count = 0
+    try:
+        async for chunk in text_to_speech_stream(
+            text, api_key=sarvam_key, target_language_code="hi-IN", speaker="shubh",
+        ):
+            chunk_count += 1
+            log.debug("Yielding chunk #%d (%d bytes)", chunk_count, len(chunk))
+            yield chunk
+    except Exception as exc:
+        log.error("TTS stream generator error: %s: %s", type(exc).__name__, exc, exc_info=True)
+        raise
+    log.info("TTS stream generator done: %d chunks yielded", chunk_count)
+
+
+def _stream_headers(**kwargs: str) -> dict[str, str]:
+    """Build custom response headers for streaming endpoints.
+    Values are URL-encoded to safely transport arbitrary text in HTTP headers."""
+    headers = {}
+    for key, val in kwargs.items():
+        if val is not None:
+            headers[f"X-Bodhi-{key}"] = urllib.parse.quote(str(val), safe="")
+    return headers
+
+
+@router.post("/start-stream")
+async def start_interview_stream(
+    body: InterviewStartRequest,
+    graph=Depends(get_graph),
+    storage: BodhiStorage = Depends(get_storage),
+    cache: BodhiCache | None = Depends(get_cache),
+    sarvam_key: str = Depends(get_sarvam_key),
+):
+    """Start interview and stream greeting audio as MP3.
+    Metadata is returned in response headers."""
+    session_id = uuid.uuid4().hex[:12]
+
+    entity_context = _load_entity_context(body.company, body.role, cache, storage)
+    suggested_topics = _load_suggested_topics(body.company, body.role, cache)
+
+    try:
+        storage.create_session(session_id, body.candidate_name, body.company, body.role)
+    except Exception:
+        pass
+
+    graph_config = {"configurable": {"thread_id": session_id}}
+    initial_state = {
+        "messages": [HumanMessage(content="Hello, I'm ready for my interview.")],
+        "session_id": session_id,
+        "candidate_name": body.candidate_name,
+        "target_company": body.company,
+        "target_role": body.role,
+        "current_phase": "intro",
+        "difficulty_level": 3,
+        "phase_scores": {},
+        "entity_context": entity_context,
+        "suggested_topics": suggested_topics,
+        "should_end": False,
+    }
+
+    result = graph.invoke(initial_state, config=graph_config)
+    greeting = _extract_text(
+        result["messages"][-1].content
+        if result["messages"] and hasattr(result["messages"][-1], "content")
+        else ""
+    )
+
+    if not sarvam_key or not greeting:
+        raise HTTPException(500, "TTS not available")
+
+    headers = _stream_headers(
+        Session=session_id,
+        Text=greeting,
+        Phase="intro",
+        End="false",
+    )
+
+    return StreamingResponse(
+        _tts_stream_generator(greeting, sarvam_key),
+        media_type="audio/mpeg",
+        headers=headers,
+    )
+
+
+@router.post("/{session_id}/message-stream")
+async def send_message_stream(
+    session_id: str,
+    body: MessageRequest,
+    graph=Depends(get_graph),
+    cache: BodhiCache | None = Depends(get_cache),
+    sarvam_key: str = Depends(get_sarvam_key),
+):
+    """Send text message and stream reply audio as MP3."""
+    graph_config = {"configurable": {"thread_id": session_id}}
+
+    try:
+        state = graph.get_state(graph_config)
+        if not state or not state.values:
+            raise HTTPException(404, f"Session '{session_id}' not found")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(404, f"Session '{session_id}' not found")
+
+    result = graph.invoke(
+        {"messages": [HumanMessage(content=body.text)]},
+        config=graph_config,
+    )
+
+    reply = ""
+    if result["messages"] and hasattr(result["messages"][-1], "content"):
+        reply = _extract_text(result["messages"][-1].content).strip()
+
+    phase = result.get("current_phase", "unknown")
+    should_end = result.get("should_end", False)
+
+    if cache:
+        try:
+            cache.save_session_state(session_id, {
+                "phase": phase,
+                "difficulty": result.get("difficulty_level", 3),
+                "scores": result.get("phase_scores", {}),
+            })
+        except Exception:
+            pass
+
+    if should_end:
+        _flush_session_async(session_id, result, graph_config)
+
+    if not sarvam_key or not reply:
+        raise HTTPException(500, "TTS not available or empty reply")
+
+    headers = _stream_headers(
+        Text=reply,
+        Transcript=body.text,
+        Phase=phase,
+        End=str(should_end).lower(),
+    )
+
+    return StreamingResponse(
+        _tts_stream_generator(reply, sarvam_key),
+        media_type="audio/mpeg",
+        headers=headers,
+    )
+
+
+@router.post("/{session_id}/audio-stream")
+async def send_audio_stream(
+    session_id: str,
+    file: UploadFile = File(...),
+    graph=Depends(get_graph),
+    storage: BodhiStorage = Depends(get_storage),
+    cache: BodhiCache | None = Depends(get_cache),
+    sarvam_key: str = Depends(get_sarvam_key),
+):
+    """Upload WAV audio and stream reply audio as MP3."""
+    graph_config = {"configurable": {"thread_id": session_id}}
+
+    try:
+        state = graph.get_state(graph_config)
+        if not state or not state.values:
+            raise HTTPException(404, f"Session '{session_id}' not found")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(404, f"Session '{session_id}' not found")
+
+    audio_bytes = await file.read()
+    if not audio_bytes or len(audio_bytes) < 1000:
+        raise HTTPException(400, "Audio file too small or empty")
+
+    if not sarvam_key:
+        raise HTTPException(500, "SARVAM_API_KEY not configured")
+
+    from src.services.stt import transcribe_audio
+    transcript = transcribe_audio(
+        audio_bytes, api_key=sarvam_key, model="saaras:v3", language_code="en-IN",
+    )
+
+    transcript = (transcript or "").strip()
+    if not transcript:
+        raise HTTPException(422, "Could not transcribe audio")
+
+    result = graph.invoke(
+        {"messages": [HumanMessage(content=transcript)]},
+        config=graph_config,
+    )
+
+    reply = ""
+    if result["messages"] and hasattr(result["messages"][-1], "content"):
+        reply = _extract_text(result["messages"][-1].content).strip()
+
+    phase = result.get("current_phase", "unknown")
+    should_end = result.get("should_end", False)
+
+    if cache:
+        try:
+            cache.save_session_state(session_id, {
+                "phase": phase,
+                "difficulty": result.get("difficulty_level", 3),
+                "scores": result.get("phase_scores", {}),
+            })
+        except Exception:
+            pass
+
+    if should_end:
+        _flush_session_async(session_id, result, graph_config)
+
+    if not reply:
+        raise HTTPException(500, "Empty reply from interviewer")
+
+    headers = _stream_headers(
+        Text=reply,
+        Transcript=transcript,
+        Phase=phase,
+        End=str(should_end).lower(),
+    )
+
+    return StreamingResponse(
+        _tts_stream_generator(reply, sarvam_key),
+        media_type="audio/mpeg",
+        headers=headers,
+    )
