@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from langchain_core.messages import HumanMessage
 
-from src.api.deps import get_cache, get_graph, get_llm, get_sarvam_key, get_storage
+from src.api.deps import get_cache, get_graph, get_llm, get_sarvam_key, get_storage, require_auth
 from src.api.models import (
     InterviewStartRequest,
     InterviewStartResponse,
@@ -221,6 +221,7 @@ def generate_interview_curriculum(company: str, role: str, storage: BodhiStorage
 @router.post("", response_model=InterviewStartResponse, status_code=201)
 async def start_interview(
     body: InterviewStartRequest,
+    user_id: str = Depends(require_auth),
     graph=Depends(get_graph),
     storage: BodhiStorage = Depends(get_storage),
     cache: BodhiCache | None = Depends(get_cache),
@@ -242,7 +243,9 @@ async def start_interview(
             cache.set_question_queue(session_id, phase, questions)
 
     try:
-        storage.create_session(session_id, body.candidate_name, body.company, body.role)
+        storage.create_session(
+            session_id, body.candidate_name, body.company, body.role, clerk_user_id=user_id
+        )
     except Exception:
         pass
 
@@ -296,6 +299,7 @@ async def start_interview(
 async def send_message(
     session_id: str,
     body: MessageRequest,
+    user_id: str = Depends(require_auth),
     graph=Depends(get_graph),
     cache: BodhiCache | None = Depends(get_cache),
     sarvam_key: str = Depends(get_sarvam_key),
@@ -360,6 +364,7 @@ async def send_message(
 async def send_audio(
     session_id: str,
     file: UploadFile = File(...),
+    user_id: str = Depends(require_auth),
     graph=Depends(get_graph),
     storage: BodhiStorage = Depends(get_storage),
     cache: BodhiCache | None = Depends(get_cache),
@@ -441,6 +446,7 @@ async def send_audio(
 @router.get("/{session_id}", response_model=SessionStateResponse)
 async def get_session(
     session_id: str,
+    user_id: str = Depends(require_auth),
     graph=Depends(get_graph),
 ):
     graph_config = {"configurable": {"thread_id": session_id}}
@@ -467,6 +473,7 @@ async def get_session(
 @router.post("/{session_id}/end", response_model=SessionEndResponse)
 async def end_interview(
     session_id: str,
+    user_id: str = Depends(require_auth),
     graph=Depends(get_graph),
     storage: BodhiStorage = Depends(get_storage),
     cache: BodhiCache | None = Depends(get_cache),
@@ -601,6 +608,7 @@ def _stream_headers(**kwargs: str) -> dict[str, str]:
 @router.post("/start-stream")
 async def start_interview_stream(
     body: InterviewStartRequest,
+    user_id: str = Depends(require_auth),
     graph=Depends(get_graph),
     storage: BodhiStorage = Depends(get_storage),
     cache: BodhiCache | None = Depends(get_cache),
@@ -624,7 +632,9 @@ async def start_interview_stream(
             cache.set_question_queue(session_id, phase, questions)
 
     try:
-        storage.create_session(session_id, body.candidate_name, body.company, body.role)
+        storage.create_session(
+            session_id, body.candidate_name, body.company, body.role, clerk_user_id=user_id
+        )
     except Exception:
         pass
 
@@ -682,6 +692,7 @@ async def start_interview_stream(
 async def send_message_stream(
     session_id: str,
     body: MessageRequest,
+    user_id: str = Depends(require_auth),
     graph=Depends(get_graph),
     cache: BodhiCache | None = Depends(get_cache),
     sarvam_key: str = Depends(get_sarvam_key),
@@ -744,6 +755,7 @@ async def send_message_stream(
 async def send_audio_stream(
     session_id: str,
     file: UploadFile = File(...),
+    user_id: str = Depends(require_auth),
     graph=Depends(get_graph),
     storage: BodhiStorage = Depends(get_storage),
     cache: BodhiCache | None = Depends(get_cache),

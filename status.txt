@@ -1,0 +1,67 @@
+On branch main
+Your branch and 'origin/main' have diverged,
+and have 1 and 10 different commits each, respectively.
+  (use "git pull" if you want to integrate the remote branch with yours)
+
+All conflicts fixed but you are still merging.
+  (use "git commit" to conclude merge)
+
+Changes to be committed:
+	new file:   .dockerignore
+	modified:   .env.example
+	modified:   .gitignore
+	new file:   .vscode/settings.json
+	new file:   Dockerfile
+	modified:   README.md
+	modified:   client/app/interview/page.tsx
+	modified:   client/app/page.tsx
+	new file:   client/app/resumes/page.tsx
+	modified:   client/lib/api.ts
+	new file:   docker-compose.yml
+	new file:   procturing_backend/WebSockets/__init__.py
+	new file:   procturing_backend/WebSockets/proctoring_ws.py
+	new file:   procturing_backend/config.py
+	new file:   procturing_backend/images/Proctoring Monitor_screenshot_28.02.2026.png
+	new file:   procturing_backend/main.py
+	new file:   procturing_backend/router/__init__.py
+	new file:   procturing_backend/router/enrollment.py
+	new file:   procturing_backend/services/__init__.py
+	new file:   procturing_backend/services/models/__init__.py
+	new file:   procturing_backend/services/models/violation.py
+	new file:   procturing_backend/services/proctoring/__init__.py
+	new file:   procturing_backend/services/proctoring/blaze_face_short_range.tflite
+	new file:   procturing_backend/services/proctoring/face_detection.py
+	new file:   procturing_backend/services/proctoring/face_landmarker.task
+	new file:   procturing_backend/services/proctoring/gaze_analysis.py
+	new file:   procturing_backend/services/proctoring/identity_detection.py
+	new file:   procturing_backend/services/proctoring/object_detection.py
+	new file:   procturing_backend/services/proctoring/orchestrator.py
+	new file:   procturing_backend/services/proctoring/violation_builder.py
+	new file:   procturing_backend/test_identity.py
+	new file:   procturing_backend/test_pipeline.py
+	new file:   requirements-server.txt
+	modified:   requirements.txt
+	modified:   src/api/app.py
+	modified:   src/api/deps.py
+	modified:   src/api/documents.py
+	modified:   src/api/interviews.py
+	modified:   src/api/models.py
+	new file:   src/api/proctoring.py
+	new file:   src/api/resumes.py
+	modified:   src/cache.py
+	modified:   src/embeddings.py
+	modified:   src/graph.py
+	modified:   src/prompts.py
+	modified:   src/rag.py
+	new file:   src/resume_parser.py
+	modified:   src/state.py
+	modified:   src/storage.py
+	modified:   src/tools.py
+	new file:   start_bodhi.sh
+	new file:   test_proctoring.py
+	new file:   test_resume_integration.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	status.txt
+

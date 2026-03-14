@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     candidate_name  TEXT NOT NULL,
     target_company  TEXT NOT NULL,
     target_role     TEXT NOT NULL,
+    clerk_user_id   TEXT,
     started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ended_at        TIMESTAMPTZ,
     overall_score   REAL,
@@ -136,6 +137,12 @@ class BodhiStorage:
         self._ensure_conn()
         with self.conn.cursor() as cur:
             cur.execute(_DDL)
+            # Migration to add clerk_user_id to existing tables safely
+            try:
+                cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS clerk_user_id TEXT;")
+            except Exception:
+                pass
+
             # Execute the user_profiles table separately so any failure is visible.
             # (psycopg2 multi-statement execute only surfaces the last statement's error.)
             cur.execute("""
@@ -180,13 +187,14 @@ class BodhiStorage:
         candidate_name: str,
         target_company: str,
         target_role: str,
+        clerk_user_id: str | None = None,
     ) -> None:
         self._ensure_conn()
         with self.conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO sessions (id, candidate_name, target_company, target_role) "
-                "VALUES (%s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
-                (session_id, candidate_name, target_company, target_role),
+                "INSERT INTO sessions (id, candidate_name, target_company, target_role, clerk_user_id) "
+                "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                (session_id, candidate_name, target_company, target_role, clerk_user_id),
             )
 
     def end_session(

@@ -1,7 +1,7 @@
 .PHONY: run cli dev
 
 run:
-	python -m uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8000 --reload-exclude client
+	uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8000 --reload-exclude client
 
 cli:
 	python -m src.main
