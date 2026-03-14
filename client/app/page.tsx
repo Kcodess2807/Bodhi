@@ -53,6 +53,11 @@ export default function Home() {
             desc: "Ingest text, upload files, search RAG",
           },
           {
+            href: "/resumes",
+            title: "Resumes",
+            desc: "Upload resume for personalized interviews",
+          },
+          {
             href: "/interview",
             title: "Interview",
             desc: "Start and conduct a mock interview",

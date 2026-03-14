@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ClerkProvider } from "@clerk/nextjs";
+import AuthControls from "./auth-controls";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Bodhi — Test Client",
-  description: "Minimal frontend to test all Bodhi API endpoints",
+  title: "Bodhi — AI Mock Interviewer",
+  description: "Voice-first AI mock interview platform",
 };
 
 const NAV = [
@@ -21,24 +23,29 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="antialiased">
-        <nav className="sticky top-0 z-50 flex items-center gap-1 border-b border-[var(--border)] bg-[var(--card)] px-6 py-3">
-          <span className="mr-4 text-lg font-bold text-white">
-            Bodhi
-          </span>
-          {NAV.map((n) => (
-            <Link
-              key={n.href}
-              href={n.href}
-              className="rounded px-3 py-1.5 text-sm text-zinc-400 transition hover:bg-white/5 hover:text-white"
-            >
-              {n.label}
-            </Link>
-          ))}
-        </nav>
-        <main className="mx-auto max-w-5xl px-6 py-8">{children}</main>
-      </body>
-    </html>
+    <ClerkProvider>
+      <html lang="en">
+        <body className="antialiased">
+          <nav className="sticky top-0 z-50 flex items-center gap-1 border-b border-(--border) bg-(--card) px-6 py-3">
+            <span className="mr-4 text-lg font-bold text-white">Bodhi</span>
+            {NAV.map((n) => (
+              <Link
+                key={n.href}
+                href={n.href}
+                className="rounded px-3 py-1.5 text-sm text-zinc-400 transition hover:bg-white/5 hover:text-white"
+              >
+                {n.label}
+              </Link>
+            ))}
+
+            {/* Auth controls */}
+            <div className="ml-auto flex items-center gap-2">
+              <AuthControls />
+            </div>
+          </nav>
+          <main className="mx-auto max-w-5xl px-6 py-8">{children}</main>
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }

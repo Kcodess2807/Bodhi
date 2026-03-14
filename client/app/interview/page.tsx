@@ -5,16 +5,22 @@ import {
   type SessionState,
   type SessionEnd,
   type StreamMeta,
+  type CandidateProfile,
   startInterviewStream,
   sendAudioStream,
   parseStreamHeaders,
   getSession,
   endInterview,
+  uploadResume,
 } from "@/lib/api";
 import { encodeWav } from "@/lib/wav";
+import { useFaceVerification } from "@/hooks/useFaceVerification";
+import { ConsentNotice } from "@/components/ConsentNotice";
+import { ReferencePhotoCapture } from "@/components/ReferencePhotoCapture";
 
 type Phase =
-  | "idle"
+  | "idle"       // form
+  | "setup"      // consent + reference photo capture (camera already on)
   | "listening"
   | "recording"
   | "processing"
@@ -40,6 +46,14 @@ const SPEECH_CONFIRM_FRAMES = 5;
 const MIN_RECORD_MS = 500;
 const FRAME_INTERVAL_MS = 2500;
 
+// ── Identity verification config (admin-tunable via env) ──────────────────────
+const ID_CHECK_INTERVAL_MS =
+  Number(process.env.NEXT_PUBLIC_ID_CHECK_INTERVAL ?? 20_000);
+const ID_SIMILARITY_THRESHOLD =
+  Number(process.env.NEXT_PUBLIC_ID_SIMILARITY_THRESHOLD ?? 0.6);
+const ID_MAX_VIOLATIONS =
+  Number(process.env.NEXT_PUBLIC_ID_MAX_VIOLATIONS ?? 3);
+
 export default function InterviewPage() {
   const [sessionId, setSessionId] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
@@ -54,6 +68,10 @@ export default function InterviewPage() {
   const [sessionFlagged, setSessionFlagged] = useState(false);
   const [violations, setViolations] = useState<Violation[]>([]);
   const [cameraError, setCameraError] = useState("");
+
+  // Setup-step state
+  const [consentAccepted, setConsentAccepted] = useState(false);
+  const [referencePhotoB64, setReferencePhotoB64] = useState<string | null>(null);
 
   const [startForm, setStartForm] = useState<{
     candidate_name: string;
@@ -70,6 +88,10 @@ export default function InterviewPage() {
     user_id: "",
     jd_text: "",
   });
+
+  // Resume upload state
+  const [uploading, setUploading] = useState(false);
+  const [uploadedProfile, setUploadedProfile] = useState<CandidateProfile | null>(null);
 
   // Audio refs
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -94,12 +116,61 @@ export default function InterviewPage() {
   const frameIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const frameCounterRef = useRef(0);
 
-  useEffect(() => {
-    phaseRef.current = phase;
-  }, [phase]);
-  useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
+  // ── Face verification ─────────────────────────────────────────────────────
+
+  const handleFaceViolation = useCallback(
+    (type: "identity_mismatch" | "no_face_detected", score: number) => {
+      // Show in UI
+      const v: Violation = {
+        violation_type: type,
+        severity: "HIGH",
+        message:
+          type === "identity_mismatch"
+            ? `Identity mismatch (score: ${score.toFixed(2)})`
+            : "No face detected in frame",
+        timestamp: new Date().toISOString(),
+      };
+      setViolations((prev) => [...prev, v].slice(-20));
+
+      // Report to backend via WebSocket (metadata only — no image)
+      const ws = proctoringWsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: "client_violation",
+            violation_type: type,
+            metadata: { confidence_score: score, source: "face_api_client" },
+          })
+        );
+      }
+    },
+    []
+  );
+
+  const handleFaceFlag = useCallback(() => {
+    setSessionFlagged(true);
+    const ws = proctoringWsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: "client_violation",
+          violation_type: "identity_mismatch",
+          metadata: { flagged: true, source: "face_api_client" },
+        })
+      );
+    }
+  }, []);
+
+  const faceVerification = useFaceVerification(videoRef, {
+    checkIntervalMs: ID_CHECK_INTERVAL_MS,
+    similarityThreshold: ID_SIMILARITY_THRESHOLD,
+    maxConsecutiveViolations: ID_MAX_VIOLATIONS,
+    onViolation: handleFaceViolation,
+    onFlag: handleFaceFlag,
+  });
+
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
   const scrollDown = () =>
     setTimeout(
@@ -115,18 +186,10 @@ export default function InterviewPage() {
           const blob = new Blob([bytes], { type: "audio/wav" });
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
-          audio.onended = () => {
-            URL.revokeObjectURL(url);
-            resolve();
-          };
-          audio.onerror = () => {
-            URL.revokeObjectURL(url);
-            resolve();
-          };
+          audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+          audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
           audio.play();
-        } catch {
-          resolve();
-        }
+        } catch { resolve(); }
       }),
     []
   );
@@ -140,14 +203,11 @@ export default function InterviewPage() {
     (response: Response): Promise<void> => {
       return new Promise(async (resolve) => {
         const reader = response.body?.getReader();
-        if (!reader) {
-          console.warn("[Bodhi] No response body reader available");
-          resolve();
-          return;
-        }
+        if (!reader) { resolve(); return; }
 
         console.time("[Bodhi] time-to-first-audio");
         let firstBatchPlayed = false;
+
 
         const BATCH_SIZE = 25; // chunks per batch (~20KB)
         const audioQueue: HTMLAudioElement[] = [];
@@ -222,6 +282,7 @@ export default function InterviewPage() {
             // If nothing is currently playing, start
             if (!currentAudio || currentAudio.ended) {
               playNext();
+
             }
           }
         };
@@ -263,7 +324,7 @@ export default function InterviewPage() {
     []
   );
 
-  // ── Mic setup ──────────────────────────────────────────
+  // ── Mic setup ──────────────────────────────────────────────────────────────
 
   const initMic = useCallback(async () => {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -281,8 +342,7 @@ export default function InterviewPage() {
 
     processor.onaudioprocess = (e) => {
       if (!isRecordingRef.current) return;
-      const input = e.inputBuffer.getChannelData(0);
-      samplesRef.current.push(new Float32Array(input));
+      samplesRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)));
     };
 
     audioCtxRef.current = ctx;
@@ -302,7 +362,7 @@ export default function InterviewPage() {
     workletRef.current = null;
   }, []);
 
-  // ── Camera setup ───────────────────────────────────────
+  // ── Camera setup ───────────────────────────────────────────────────────────
 
   const initCamera = useCallback(async () => {
     try {
@@ -321,32 +381,26 @@ export default function InterviewPage() {
   }, []);
 
   const cleanupCamera = useCallback(() => {
-    if (frameIntervalRef.current) {
-      clearInterval(frameIntervalRef.current);
-      frameIntervalRef.current = null;
-    }
+    if (frameIntervalRef.current) { clearInterval(frameIntervalRef.current); frameIntervalRef.current = null; }
     cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
     cameraStreamRef.current = null;
   }, []);
 
-  // ── Capture frame from video as base64 JPEG ────────────
+  // ── Capture frame ──────────────────────────────────────────────────────────
 
   const captureFrame = useCallback((): string | null => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || video.readyState < 2) return null;
-
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    // Remove the data:image/jpeg;base64, prefix
     return canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
   }, []);
 
-  // ── Proctoring WebSocket ────────────────────────────────
+  // ── Proctoring WebSocket ───────────────────────────────────────────────────
 
   const connectProctoringWs = useCallback(
     (sid: string, referenceImageB64: string) => {
@@ -356,78 +410,53 @@ export default function InterviewPage() {
       proctoringWsRef.current = ws;
 
       ws.onopen = () => {
-        // Enroll with reference photo
-        ws.send(
-          JSON.stringify({
-            type: "enroll",
-            candidate_id: sid,
-            image: referenceImageB64,
-          })
-        );
+        ws.send(JSON.stringify({ type: "enroll", candidate_id: sid, image: referenceImageB64 }));
       };
 
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-
           if (msg.type === "enrolled") {
             if (msg.success) {
               setProctoringActive(true);
-              // Start sending frames
               frameIntervalRef.current = setInterval(() => {
                 if (proctoringWsRef.current?.readyState !== WebSocket.OPEN) return;
                 const frame = captureFrame();
                 if (!frame) return;
                 frameCounterRef.current += 1;
                 proctoringWsRef.current.send(
-                  JSON.stringify({
-                    type: "frame",
-                    frame_id: `frame-${frameCounterRef.current}`,
-                    frame,
-                  })
+                  JSON.stringify({ type: "frame", frame_id: `frame-${frameCounterRef.current}`, frame })
                 );
               }, FRAME_INTERVAL_MS);
             }
           } else if (msg.type === "frame_result") {
-            if (msg.has_violations && msg.violations?.length > 0) {
+            if (msg.has_violations && msg.violations?.length > 0)
               setViolations((prev) => [...prev, ...msg.violations].slice(-20));
-            }
-            if (msg.session_flagged) {
-              setSessionFlagged(true);
-            }
+            if (msg.session_flagged) setSessionFlagged(true);
           } else if (msg.type === "session_flagged") {
             setSessionFlagged(true);
           }
-        } catch {
-          // ignore parse errors
-        }
+        } catch { /* ignore */ }
       };
 
-      ws.onerror = () => {
-        setCameraError("Proctoring connection error.");
-      };
-
-      ws.onclose = () => {
-        setProctoringActive(false);
-      };
+      ws.onerror = () => setCameraError("Proctoring connection error.");
+      ws.onclose = () => setProctoringActive(false);
     },
     [captureFrame]
   );
 
   const endProctoringSession = useCallback(() => {
-    if (frameIntervalRef.current) {
-      clearInterval(frameIntervalRef.current);
-      frameIntervalRef.current = null;
-    }
+    if (frameIntervalRef.current) { clearInterval(frameIntervalRef.current); frameIntervalRef.current = null; }
+    faceVerification.stopVerification();
     const ws = proctoringWsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "end_session" }));
       ws.close();
     }
     proctoringWsRef.current = null;
-  }, []);
+  }, [faceVerification]);
 
-  // ── VAD loop ───────────────────────────────────────────
+  // ── VAD loop ───────────────────────────────────────────────────────────────
 
   const startListening = useCallback(() => {
     setPhase("listening");
@@ -442,9 +471,7 @@ export default function InterviewPage() {
     const buf = new Float32Array(analyser.fftSize);
 
     const tick = () => {
-      if (phaseRef.current !== "listening" && phaseRef.current !== "recording")
-        return;
-
+      if (phaseRef.current !== "listening" && phaseRef.current !== "recording") return;
       analyser.getFloatTimeDomainData(buf);
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
@@ -463,32 +490,23 @@ export default function InterviewPage() {
             samplesRef.current = [];
             setPhase("recording");
           }
-        } else {
-          speechFramesRef.current = 0;
-        }
+        } else { speechFramesRef.current = 0; }
       } else if (phaseRef.current === "recording") {
         if (!isSpeech) {
           if (silenceStartRef.current === 0) silenceStartRef.current = now;
-          else if (
-            now - silenceStartRef.current >= SILENCE_DURATION_MS &&
-            now - recordStartRef.current >= MIN_RECORD_MS
-          ) {
+          else if (now - silenceStartRef.current >= SILENCE_DURATION_MS && now - recordStartRef.current >= MIN_RECORD_MS) {
             isRecordingRef.current = false;
             finishRecording();
             return;
           }
-        } else {
-          silenceStartRef.current = 0;
-        }
+        } else { silenceStartRef.current = 0; }
       }
-
       rafRef.current = requestAnimationFrame(tick);
     };
-
     rafRef.current = requestAnimationFrame(tick);
   }, []);
 
-  // ── Finish recording & send ────────────────────────────
+  // ── Finish recording & send ────────────────────────────────────────────────
 
   const finishRecording = useCallback(async () => {
     setPhase("processing");
@@ -496,46 +514,24 @@ export default function InterviewPage() {
     setLevel(0);
 
     const chunks = samplesRef.current;
-    if (chunks.length === 0) {
-      startListening();
-      return;
-    }
+    if (chunks.length === 0) { startListening(); return; }
 
     const totalLen = chunks.reduce((a, c) => a + c.length, 0);
     const merged = new Float32Array(totalLen);
     let offset = 0;
-    for (const c of chunks) {
-      merged.set(c, offset);
-      offset += c.length;
-    }
+    for (const c of chunks) { merged.set(c, offset); offset += c.length; }
     samplesRef.current = [];
 
     const ctx = audioCtxRef.current;
     const wavBlob = encodeWav(merged, ctx?.sampleRate ?? 16000);
 
     try {
-      const res = await sendAudioStream(
-        sessionIdRef.current,
-        wavBlob,
-        "recording.wav"
-      );
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => res.statusText);
-        throw new Error(`${res.status}: ${errText}`);
-      }
+      const res = await sendAudioStream(sessionIdRef.current, wavBlob, "recording.wav");
+      if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => res.statusText)}`);
 
       const meta: StreamMeta = parseStreamHeaders(res);
-
-      if (meta.transcript) {
-        setTranscript((prev) => [...prev, { speaker: "user", text: meta.transcript! }]);
-      }
-      if (meta.text) {
-        setTranscript((prev) => [
-          ...prev,
-          { speaker: "bodhi", text: meta.text!, phase: meta.phase },
-        ]);
-      }
+      if (meta.transcript) setTranscript((prev) => [...prev, { speaker: "user", text: meta.transcript! }]);
+      if (meta.text) setTranscript((prev) => [...prev, { speaker: "bodhi", text: meta.text!, phase: meta.phase }]);
       scrollDown();
 
       setPhase("speaking");
@@ -546,10 +542,7 @@ export default function InterviewPage() {
         setPhase("ended");
         endProctoringSession();
         phaseRef.current = "ended";
-        try {
-          const end = await endInterview(sessionIdRef.current);
-          setSummary(end);
-        } catch {}
+        try { const end = await endInterview(sessionIdRef.current); setSummary(end); } catch {}
         cleanupMic();
         cleanupCamera();
         return;
@@ -564,58 +557,60 @@ export default function InterviewPage() {
   }, [playStreamingAudio, cleanupMic, cleanupCamera, startListening, endProctoringSession]);
 
   const refreshSession = async () => {
-    try {
-      const info = await getSession(sessionIdRef.current);
-      setSessionInfo(info);
-    } catch {}
+    try { const info = await getSession(sessionIdRef.current); setSessionInfo(info); } catch {}
   };
 
-  // ── Start interview ────────────────────────────────────
+  // ── Step 1: form submit → init camera + load models → show setup UI ────────
 
-  const handleStart = async (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setPhase("processing");
-    phaseRef.current = "processing";
     try {
-      // Init mic and camera in parallel
-      await Promise.all([initMic(), initCamera()]);
+      await initCamera();
+      // Load face-api models in background (non-blocking)
+      faceVerification.loadModels();
+      setPhase("setup");
+    } catch (err) {
+      setError(String(err));
+      setPhase("idle");
+    }
+  };
 
-      // Brief wait for video to be ready, then capture reference photo
-      await new Promise((res) => setTimeout(res, 800));
-      const referencePhoto = captureFrame();
+  // ── Step 2: setup complete → start the actual interview ───────────────────
 
+  const handleSetupComplete = async () => {
+    if (!consentAccepted || !referencePhotoB64) return;
+    setError("");
+    setPhase("processing");
+    phaseRef.current = "processing";
+
+    try {
+      await initMic();
       const res = await startInterviewStream(startForm);
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => res.statusText);
-        throw new Error(`${res.status}: ${errText}`);
-      }
+      if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => res.statusText)}`);
 
       const meta: StreamMeta = parseStreamHeaders(res);
+      if (meta.session) setSessionId(meta.session);
+      if (meta.text) setTranscript([{ speaker: "bodhi", text: meta.text, phase: "intro" }]);
 
       if (meta.session) {
-        setSessionId(meta.session);
-      }
-      if (meta.text) {
-        setTranscript([
-          { speaker: "bodhi", text: meta.text, phase: "intro" },
-        ]);
-      }
-
-      // Connect proctoring WebSocket (if camera is available)
-      if (referencePhoto && meta.session) {
-        connectProctoringWs(meta.session, referencePhoto);
+        // Server-side proctoring (DeepFace)
+        connectProctoringWs(meta.session, referencePhotoB64);
+        // Client-side verification starts once proctoring WS enrolls
+        // (start after a short delay to let enrollment complete)
+        setTimeout(() => {
+          if (faceVerification.hasReference) faceVerification.startVerification();
+        }, 3000);
       }
 
       setPhase("speaking");
       await playStreamingAudio(res);
-
       refreshSession();
       startListening();
     } catch (err) {
       setError(String(err));
-      setPhase("idle");
+      setPhase("setup");
     }
   };
 
@@ -624,18 +619,37 @@ export default function InterviewPage() {
     isRecordingRef.current = false;
     setPhase("processing");
     endProctoringSession();
-    try {
-      const r = await endInterview(sessionIdRef.current);
-      setSummary(r);
-      setPhase("ended");
-    } catch (err) {
-      setError(String(err));
-    }
+    try { const r = await endInterview(sessionIdRef.current); setSummary(r); setPhase("ended"); }
+    catch (err) { setError(String(err)); }
     cleanupMic();
     cleanupCamera();
   };
 
-  // ── Cleanup on unmount ─────────────────────────────────
+  // ── Resume upload ──────────────────────────────────────────────────────────
+
+  const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setError("");
+    try {
+      const result = await uploadResume(file);
+      setUploadedProfile(result.profile);
+      setStartForm((prev) => ({ ...prev, user_id: result.user_id, candidate_name: result.profile.name || prev.candidate_name }));
+    } catch (err) { setError(String(err)); }
+    finally { setUploading(false); }
+  };
+
+  // ── URL params ─────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get("mode") as "option_a" | "option_b" | null;
+    const userId = params.get("user_id");
+    if (mode && userId) setStartForm((prev) => ({ ...prev, mode, user_id: userId }));
+  }, []);
+
+  // ── Cleanup ────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     return () => {
@@ -646,11 +660,12 @@ export default function InterviewPage() {
     };
   }, [cleanupMic, cleanupCamera, endProctoringSession]);
 
-  // ── Render ─────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   const inputCls =
     "rounded border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm w-full";
 
+  // ── Idle: setup form ───────────────────────────────────────────────────────
   if (phase === "idle") {
     return (
       <div className="mx-auto max-w-lg space-y-6 pt-12">
@@ -659,109 +674,155 @@ export default function InterviewPage() {
           Hands-free voice conversation. Speak naturally — Bodhi listens, responds, and loops.
         </p>
         {error && (
-          <div className="rounded border border-red-800 bg-red-900/30 px-4 py-2 text-sm text-red-300">
-            {error}
-          </div>
+          <div className="rounded border border-red-800 bg-red-900/30 px-4 py-2 text-sm text-red-300">{error}</div>
         )}
-        <form
-          onSubmit={handleStart}
-          className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-5"
-        >
-          <input
-            placeholder="Your name"
-            value={startForm.candidate_name}
-            onChange={(e) =>
-              setStartForm({ ...startForm, candidate_name: e.target.value })
-            }
-            className={inputCls}
-          />
-          <input
-            placeholder="Company"
-            value={startForm.company}
-            onChange={(e) =>
-              setStartForm({ ...startForm, company: e.target.value })
-            }
-            className={inputCls}
-          />
-          <input
-            placeholder="Role"
-            value={startForm.role}
-            onChange={(e) =>
-              setStartForm({ ...startForm, role: e.target.value })
-            }
-            className={inputCls}
-          />
-          <div className="flex flex-col gap-3">
+        <form onSubmit={handleFormSubmit} className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-5">
+          <div>
+            <label className="block text-xs text-zinc-400 mb-1">Interview Mode</label>
             <select
               value={startForm.mode}
-              onChange={(e) =>
-                setStartForm({
-                  ...startForm,
-                  mode: e.target.value as "standard" | "option_a" | "option_b",
-                })
-              }
+              onChange={(e) => { setStartForm({ ...startForm, mode: e.target.value as "standard" | "option_a" | "option_b" }); setUploadedProfile(null); setError(""); }}
               className={inputCls}
             >
-              <option value="standard">Standard (Company + Role + JD)</option>
-              <option value="option_a">Resume Based (Personalized)</option>
-              <option value="option_b">JD Gap Analysis (Resume + JD)</option>
+              <option value="standard">Standard (Company-based)</option>
+              <option value="option_a">Resume-Based</option>
+              <option value="option_b">JD-Targeted</option>
             </select>
-
-            {startForm.mode !== "standard" && (
-              <input
-                placeholder="User ID (from Resumes tab)"
-                value={startForm.user_id}
-                onChange={(e) =>
-                  setStartForm({ ...startForm, user_id: e.target.value })
-                }
-                className={inputCls}
-                required={startForm.mode !== "standard"}
-              />
-            )}
           </div>
 
-          <textarea
-            placeholder={
-              startForm.mode === "option_b"
-                ? "Paste Job Description here (Required for Gap Analysis)"
-                : "Paste Job Description / JD (optional — helps customize interview questions)"
-            }
-            value={startForm.jd_text}
-            onChange={(e) =>
-              setStartForm({ ...startForm, jd_text: e.target.value })
-            }
-            rows={4}
-            className={inputCls + " resize-y"}
-            required={startForm.mode === "option_b"}
-          />
-          <button
-            type="submit"
-            className="w-full rounded border border-white py-2.5 text-sm font-medium text-white transition hover:bg-white hover:text-black"
-          >
-            Start Interview
+          {startForm.mode !== "standard" && !startForm.user_id && (
+            <div className="space-y-2">
+              <label className="block text-xs text-zinc-400">Upload Your Resume (PDF or DOCX)</label>
+              <input type="file" accept=".pdf,.docx" onChange={handleResumeUpload} disabled={uploading}
+                className="w-full rounded border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm file:mr-4 file:rounded file:border-0 file:bg-white file:px-3 file:py-1 file:text-xs file:font-medium file:text-black hover:file:bg-zinc-200 disabled:opacity-50"
+              />
+              {uploading && <p className="text-xs text-zinc-400">Uploading and parsing resume...</p>}
+            </div>
+          )}
+
+          {startForm.mode !== "standard" && uploadedProfile && (
+            <div className="rounded border border-green-700 bg-green-900/20 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-green-300">✓ Resume Uploaded</p>
+                <button type="button" onClick={() => { setUploadedProfile(null); setStartForm((p) => ({ ...p, user_id: "" })); }}
+                  className="text-xs text-zinc-400 hover:text-white">Change</button>
+              </div>
+              <div className="text-xs text-zinc-300">
+                <p className="font-medium">{uploadedProfile.name}</p>
+                {uploadedProfile.email && <p className="text-zinc-400">{uploadedProfile.email}</p>}
+                {uploadedProfile.skills.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {uploadedProfile.skills.slice(0, 5).map((s, i) => (
+                      <span key={i} className="rounded bg-white/10 px-1.5 py-0.5 text-[10px]">{s}</span>
+                    ))}
+                    {uploadedProfile.skills.length > 5 && <span className="text-[10px] text-zinc-500">+{uploadedProfile.skills.length - 5} more</span>}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <input placeholder="Your name" value={startForm.candidate_name}
+            onChange={(e) => setStartForm({ ...startForm, candidate_name: e.target.value })} className={inputCls} />
+
+          {startForm.mode === "standard" && (
+            <>
+              <input placeholder="Company" value={startForm.company}
+                onChange={(e) => setStartForm({ ...startForm, company: e.target.value })} className={inputCls} />
+              <input placeholder="Role" value={startForm.role}
+                onChange={(e) => setStartForm({ ...startForm, role: e.target.value })} className={inputCls} />
+            </>
+          )}
+
+          {startForm.mode === "option_b" && (
+            <textarea placeholder="Job Description (paste full JD text here)" value={startForm.jd_text}
+              onChange={(e) => setStartForm({ ...startForm, jd_text: e.target.value })}
+              className={`${inputCls} min-h-32`} required />
+          )}
+
+          <button type="submit"
+            className="w-full rounded border border-white py-2.5 text-sm font-medium text-white transition hover:bg-white hover:text-black">
+            Continue →
           </button>
         </form>
       </div>
     );
   }
 
+  // ── Setup: consent + reference photo ──────────────────────────────────────
+  if (phase === "setup") {
+    const canStart = consentAccepted && !!referencePhotoB64;
+    return (
+      <div className="mx-auto max-w-lg space-y-5 pt-8">
+        <div>
+          <h1 className="text-2xl font-bold">Identity Verification Setup</h1>
+          <p className="text-sm text-zinc-400 mt-1">
+            Before the interview begins, please complete the two steps below.
+          </p>
+        </div>
+
+        {error && (
+          <div className="rounded border border-red-800 bg-red-900/30 px-4 py-2 text-sm text-red-300">{error}</div>
+        )}
+
+        {/* Live camera preview (camera already on) */}
+        <div className="rounded-lg border border-[var(--border)] overflow-hidden bg-black">
+          <video ref={videoRef} muted playsInline className="w-full" style={{ transform: "scaleX(-1)" }} />
+          {cameraError && <p className="px-3 py-2 text-xs text-zinc-500">{cameraError}</p>}
+        </div>
+
+        {/* Step 1: Consent */}
+        <ConsentNotice accepted={consentAccepted} onAccept={setConsentAccepted} />
+
+        {/* Step 2: Reference photo */}
+        <ReferencePhotoCapture
+          onReady={setReferencePhotoB64}
+          modelsLoading={faceVerification.modelsLoading}
+          modelsLoaded={faceVerification.modelsLoaded}
+          setReferenceFromFile={faceVerification.setReferenceFromFile}
+          setReferenceFromWebcam={faceVerification.setReferenceFromWebcam}
+          videoRef={videoRef}
+        />
+
+        <div className="flex gap-3">
+          <button type="button" onClick={() => { cleanupCamera(); setPhase("idle"); }}
+            className="flex-1 rounded border border-[var(--border)] py-2.5 text-sm text-zinc-400 hover:text-white transition">
+            ← Back
+          </button>
+          <button type="button" onClick={handleSetupComplete} disabled={!canStart}
+            className="flex-1 rounded border border-white py-2.5 text-sm font-medium text-white transition hover:bg-white hover:text-black disabled:opacity-40 disabled:cursor-not-allowed">
+            Start Interview
+          </button>
+        </div>
+
+        {!canStart && (
+          <p className="text-center text-xs text-zinc-600">
+            {!consentAccepted && !referencePhotoB64 && "Accept consent and set a reference photo to continue."}
+            {consentAccepted && !referencePhotoB64 && "Set a reference photo to continue."}
+            {!consentAccepted && referencePhotoB64 && "Accept the consent notice to continue."}
+          </p>
+        )}
+
+        {/* Hidden canvas used by ReferencePhotoCapture */}
+        <canvas ref={canvasRef} className="hidden" />
+      </div>
+    );
+  }
+
+  // ── Active interview ───────────────────────────────────────────────────────
   return (
     <div className="flex h-[calc(100vh-80px)] gap-4">
-      {/* Hidden canvas for frame capture */}
       <canvas ref={canvasRef} className="hidden" />
 
       {/* Main area */}
       <div className="flex flex-1 flex-col">
-        {/* Header */}
         <div className="mb-3 flex items-center justify-between">
           <h1 className="text-xl font-bold">Interview</h1>
           <div className="flex items-center gap-3">
             <span className="text-xs text-zinc-500">{sessionId}</span>
             {phase !== "ended" && (
-              <button
-                onClick={handleEnd}
-                className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-500"
-              >
+              <button onClick={handleEnd}
+                className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-500">
                 End Interview
               </button>
             )}
@@ -769,25 +830,16 @@ export default function InterviewPage() {
         </div>
 
         {error && (
-          <div className="mb-2 rounded border border-red-800 bg-red-900/30 px-3 py-1.5 text-xs text-red-300">
-            {error}
-          </div>
+          <div className="mb-2 rounded border border-red-800 bg-red-900/30 px-3 py-1.5 text-xs text-red-300">{error}</div>
         )}
 
-        {/* Status indicator */}
         <div className="mb-3 flex items-center gap-3">
-          <div
-            className={`h-3 w-3 rounded-full transition-all ${
-              phase === "listening"
-                ? "animate-pulse bg-green-400"
-                : phase === "recording"
-                  ? "bg-red-500"
-                  : phase === "processing"
-                    ? "animate-pulse bg-yellow-400"
-                    : phase === "speaking"
-                      ? "animate-pulse bg-blue-400"
-                      : "bg-zinc-600"
-            }`}
+          <div className={`h-3 w-3 rounded-full transition-all ${
+            phase === "listening" ? "animate-pulse bg-green-400"
+            : phase === "recording" ? "bg-red-500"
+            : phase === "processing" ? "animate-pulse bg-yellow-400"
+            : phase === "speaking" ? "animate-pulse bg-blue-400"
+            : "bg-zinc-600"}`}
           />
           <span className="text-sm text-zinc-400">
             {phase === "listening" && "Listening... speak when ready"}
@@ -799,67 +851,40 @@ export default function InterviewPage() {
           {(phase === "listening" || phase === "recording") && (
             <div className="flex h-4 items-end gap-0.5">
               {Array.from({ length: 20 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="w-1 rounded-sm bg-white transition-all"
-                  style={{
-                    height: `${Math.min(100, Math.max(8, level * 3000 * (1 + Math.random() * 0.3)))}%`,
-                    opacity: level > SILENCE_THRESHOLD ? 1 : 0.3,
-                  }}
-                />
+                <div key={i} className="w-1 rounded-sm bg-white transition-all"
+                  style={{ height: `${Math.min(100, Math.max(8, level * 3000 * (1 + Math.random() * 0.3)))}%`, opacity: level > SILENCE_THRESHOLD ? 1 : 0.3 }} />
               ))}
             </div>
           )}
         </div>
 
-        {/* Transcript */}
-        <div
-          className="flex-1 space-y-4 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--card)] p-5"
-        >
+        <div className="flex-1 space-y-4 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--card)] p-5">
           {transcript.map((t, i) => (
             <div key={i} className="flex gap-3">
-              <div
-                className={`mt-0.5 h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${
-                  t.speaker === "bodhi"
-                    ? "bg-white text-black"
-                    : "bg-zinc-700 text-zinc-300"
-                }`}
-              >
+              <div className={`mt-0.5 h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${
+                t.speaker === "bodhi" ? "bg-white text-black" : "bg-zinc-700 text-zinc-300"}`}>
                 {t.speaker === "bodhi" ? "B" : "U"}
               </div>
               <div className="flex-1">
-                {t.phase && (
-                  <span className="mb-0.5 inline-block rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-zinc-500">
-                    {t.phase}
-                  </span>
-                )}
-                <p className="text-sm leading-relaxed text-zinc-200 whitespace-pre-wrap">
-                  {t.text}
-                </p>
+                {t.phase && <span className="mb-0.5 inline-block rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-zinc-500">{t.phase}</span>}
+                <p className="text-sm leading-relaxed text-zinc-200 whitespace-pre-wrap">{t.text}</p>
               </div>
             </div>
           ))}
           {phase === "processing" && (
             <div className="flex gap-3">
-              <div className="mt-0.5 h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold bg-white text-black">
-                B
-              </div>
+              <div className="mt-0.5 h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold bg-white text-black">B</div>
               <p className="text-sm text-zinc-500 animate-pulse">Thinking...</p>
             </div>
           )}
           <div ref={transcriptEndRef} />
         </div>
 
-        {/* Summary */}
         {summary && (
           <div className="mt-3 rounded-lg border border-green-700 bg-green-900/30 p-4 text-sm">
             <h3 className="mb-1 font-semibold text-green-300">Interview Complete</h3>
             <p className="text-zinc-300">{summary.summary}</p>
-            {summary.overall_score != null && (
-              <p className="mt-1 text-zinc-400">
-                Score: {summary.overall_score.toFixed(2)}
-              </p>
-            )}
+            {summary.overall_score != null && <p className="mt-1 text-zinc-400">Score: {summary.overall_score.toFixed(2)}</p>}
           </div>
         )}
       </div>
@@ -868,54 +893,54 @@ export default function InterviewPage() {
       <div className="hidden w-52 shrink-0 space-y-3 lg:block">
         {/* Camera preview */}
         <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] overflow-hidden">
-          <video
-            ref={videoRef}
-            muted
-            playsInline
-            className="w-full rounded-lg"
-            style={{ transform: "scaleX(-1)" }}
-          />
-          {cameraError && (
-            <p className="px-3 py-2 text-xs text-zinc-500">{cameraError}</p>
-          )}
+          <video ref={videoRef} muted playsInline className="w-full rounded-lg" style={{ transform: "scaleX(-1)" }} />
+          {cameraError && <p className="px-3 py-2 text-xs text-zinc-500">{cameraError}</p>}
         </div>
+
+        {/* Identity verification status */}
+        {faceVerification.isActive && (
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 text-xs">
+            <div className="flex items-center gap-2 mb-1.5">
+              <div className={`h-2 w-2 rounded-full ${
+                faceVerification.consecutiveMismatches > 0 ? "bg-red-500" : "animate-pulse bg-green-400"}`} />
+              <span className="font-semibold text-zinc-300">ID Verification</span>
+            </div>
+            {faceVerification.lastScore !== null && (
+              <p className="text-zinc-500">
+                Match: <span className={`font-medium ${faceVerification.lastScore > 0.5 ? "text-green-400" : "text-red-400"}`}>
+                  {(faceVerification.lastScore * 100).toFixed(0)}%
+                </span>
+              </p>
+            )}
+            {faceVerification.consecutiveMismatches > 0 && (
+              <p className="text-red-400 mt-1">
+                {faceVerification.consecutiveMismatches} consecutive mismatch{faceVerification.consecutiveMismatches > 1 ? "es" : ""}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Proctoring status */}
         <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 text-sm">
           <div className="mb-2 flex items-center gap-2">
-            <div
-              className={`h-2 w-2 rounded-full ${
-                sessionFlagged
-                  ? "bg-red-500"
-                  : proctoringActive
-                    ? "animate-pulse bg-green-400"
-                    : "bg-zinc-600"
-              }`}
-            />
+            <div className={`h-2 w-2 rounded-full ${
+              sessionFlagged ? "bg-red-500" : proctoringActive ? "animate-pulse bg-green-400" : "bg-zinc-600"}`} />
             <h3 className="font-semibold text-zinc-300">
               {sessionFlagged ? "Flagged" : proctoringActive ? "Proctoring" : "Inactive"}
             </h3>
           </div>
-          {sessionFlagged && (
-            <p className="mb-2 text-xs text-red-400">
-              Session flagged due to violations.
-            </p>
-          )}
+          {sessionFlagged && <p className="mb-2 text-xs text-red-400">Session flagged due to violations.</p>}
           {violations.length > 0 && (
             <div className="space-y-1 max-h-36 overflow-y-auto">
               {violations.slice(-5).map((v, i) => (
                 <div key={i} className="rounded bg-red-900/20 px-2 py-1">
-                  <p className="text-[10px] font-medium text-red-300 capitalize">
-                    {v.violation_type.replace(/_/g, " ")}
-                  </p>
+                  <p className="text-[10px] font-medium text-red-300 capitalize">{v.violation_type.replace(/_/g, " ")}</p>
                   <p className="text-[10px] text-zinc-500">{v.message}</p>
                 </div>
               ))}
             </div>
           )}
-          {violations.length === 0 && proctoringActive && (
-            <p className="text-xs text-zinc-500">No violations detected.</p>
-          )}
+          {violations.length === 0 && proctoringActive && <p className="text-xs text-zinc-500">No violations detected.</p>}
         </div>
 
         {/* Session info */}
@@ -923,22 +948,10 @@ export default function InterviewPage() {
           <h3 className="mb-2 font-semibold text-zinc-300">Session</h3>
           {sessionInfo ? (
             <dl className="space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <dt className="text-zinc-500">Phase</dt>
-                <dd className="font-medium">{sessionInfo.phase}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-zinc-500">Difficulty</dt>
-                <dd className="font-medium">{sessionInfo.difficulty_level}/5</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-zinc-500">Company</dt>
-                <dd className="font-medium">{sessionInfo.company}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-zinc-500">Role</dt>
-                <dd className="font-medium">{sessionInfo.role}</dd>
-              </div>
+              <div className="flex justify-between"><dt className="text-zinc-500">Phase</dt><dd className="font-medium">{sessionInfo.phase}</dd></div>
+              <div className="flex justify-between"><dt className="text-zinc-500">Difficulty</dt><dd className="font-medium">{sessionInfo.difficulty_level}/5</dd></div>
+              <div className="flex justify-between"><dt className="text-zinc-500">Company</dt><dd className="font-medium">{sessionInfo.company}</dd></div>
+              <div className="flex justify-between"><dt className="text-zinc-500">Role</dt><dd className="font-medium">{sessionInfo.role}</dd></div>
             </dl>
           ) : (
             <p className="text-xs text-zinc-500">Loading...</p>

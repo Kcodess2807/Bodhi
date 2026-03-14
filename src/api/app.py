@@ -5,6 +5,11 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 
+# Set TensorFlow environment variables BEFORE any imports
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress TF warnings
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")  # Force CPU usage
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")  # Disable oneDNN warnings
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,8 +18,21 @@ load_dotenv()
 
 # Configure logging for Bodhi debug output
 import logging
+import warnings
+
+# Suppress TensorFlow and related warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', message='.*CUDA.*')
+warnings.filterwarnings('ignore', message='.*GPU.*')
+warnings.filterwarnings('ignore', message='.*CuDNN.*')
+
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("bodhi").setLevel(logging.DEBUG)
+
+# Suppress TensorFlow logs
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+logging.getLogger("absl").setLevel(logging.ERROR)
 
 
 @asynccontextmanager
