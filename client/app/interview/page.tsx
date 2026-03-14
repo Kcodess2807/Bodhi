@@ -5,10 +5,7 @@ import { useRouter } from "next/navigation"
 import Navbar from "@/components/Navbar"
 import { PageHeader } from "@/components/ui/page-header"
 import { InterviewSetupForm, type InterviewFormData } from "@/components/interview/InterviewSetupForm"
-import { TranscriptView } from "@/components/interview/TranscriptView"
-import { StatusIndicator } from "@/components/interview/StatusIndicator"
-import { SessionInfoCard } from "@/components/interview/SessionInfoCard"
-import { ProctoringPanel } from "@/components/interview/ProctoringPanel"
+import { InterviewSessionView } from "@/components/interview/InterviewSessionView"
 import { InterviewSummary } from "@/components/interview/InterviewSummary"
 import { useInterviewAudio } from "@/hooks/useInterviewAudio"
 import { useProctoring } from "@/hooks/useProctoring"
@@ -258,95 +255,35 @@ export default function InterviewPage() {
     )
   }
 
-  // ── Render: Active Interview ─────────────────────────────
-  return (
-    <div className="min-h-screen bg-[#F7F5F3]">
-      <Navbar />
-      {/* Hidden canvas for proctoring snapshots */}
-      <canvas ref={canvasRef} className="hidden" />
-
-      <div className="pt-24 pb-8 px-4 sm:px-6 max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-[#37322F]">
-              {phase === "ended" ? "Interview Complete" : "Live Interview"}
-            </h1>
-            {sessionId && (
-              <p className="text-sm text-[rgba(55,50,47,0.5)] mt-1">
-                Session: {sessionId.slice(0, 12)}...
-              </p>
-            )}
-          </div>
-          {phase !== "ended" && (
-            <button
-              onClick={handleEnd}
-              className="rounded-full bg-red-500 px-5 py-2 text-sm font-semibold text-white hover:bg-red-600 transition-all duration-200 hover:shadow-[0px_4px_12px_rgba(239,68,68,0.3)] hover:scale-105"
-            >
-              End Interview
-            </button>
-          )}
-        </div>
-
-        {error && (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 animate-fade-in-up">
-            {error}
-          </div>
-        )}
-
-        {/* ── Ended + Summary ───────────────────────────── */}
-        {phase === "ended" && summary && (
+  // ── Render: Active Interview - Show summary if ended, otherwise show session view
+  if (phase === "ended" && summary) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="pt-24 pb-8 px-4 sm:px-6 max-w-7xl mx-auto">
           <InterviewSummary summary={summary} />
-        )}
-
-        {/* ── Active Session Grid ───────────────────────── */}
-        {phase !== "ended" && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Main: Status + Transcript */}
-            <div className="lg:col-span-2 space-y-4">
-              <StatusIndicator
-                phase={phase}
-                level={audio.level}
-                silenceThreshold={SILENCE_THRESHOLD}
-              />
-              <TranscriptView
-                transcript={transcript}
-                isProcessing={phase === "processing"}
-                interviewerPersona={formData?.interviewer_persona ?? "bodhi"}
-              />
-              {loadingReport && (
-                <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-6 text-center animate-pulse">
-                  <p className="text-sm font-medium text-blue-700">Generating comprehensive report...</p>
-                  <p className="text-xs text-blue-500 mt-2">This may take a few moments</p>
-                </div>
-              )}
-              {report && (
-                <div className="mt-6 animate-fade-in-up">
-                  <ReportPreview report={report} onDownloadPDF={handleDownloadPDF} downloading={downloadingPDF} />
-                </div>
-              )}
-            </div>
-
-            {/* Sidebar: Proctoring + Session Info */}
-            <div className="space-y-4">
-              <ProctoringPanel
-                videoRef={videoRef}
-                proctoringActive={proctoring.proctoringActive}
-                sessionFlagged={proctoring.sessionFlagged}
-                violations={proctoring.violations}
-                cameraError={proctoring.cameraError}
-                sentimentData={sentiment.sentimentData}
-                faceVerification={{
-                  isActive: false,
-                  lastScore: null,
-                  consecutiveMismatches: 0,
-                }}
-              />
-              <SessionInfoCard sessionInfo={sessionInfo} sessionId={sessionId} />
-            </div>
-          </div>
-        )}
+        </div>
       </div>
-    </div>
+    )
+  }
+
+  // Render: Active Interview Session (no navbar, full screen)
+  return (
+    <>
+      <canvas ref={canvasRef} className="hidden" />
+      <InterviewSessionView
+        sessionId={sessionId}
+        videoRef={videoRef}
+        transcript={transcript}
+        phase={phase}
+        onEndSession={handleEnd}
+        proctoringActive={proctoring.proctoringActive}
+        sessionFlagged={proctoring.sessionFlagged}
+        cameraError={proctoring.cameraError}
+        sentimentData={sentiment.sentimentData}
+        violationCount={proctoring.violations.length}
+        interviewerPersona={formData?.interviewer_persona ?? "bodhi"}
+      />
+    </>
   )
 }
