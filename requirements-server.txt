@@ -1,0 +1,35 @@
+# Server-only requirements (no mic/speaker hardware needed)
+# Use this for production deployments (Vultr, Docker, etc.)
+# For local CLI voice loop: install requirements.txt instead
+
+# LLM + orchestration
+sarvamai>=0.1.0
+langchain>=0.3.0
+langchain-google-genai>=2.0.0
+langgraph>=0.2.0
+python-dotenv>=1.0.0
+
+# Audio processing (needed by STT service for audio chunking)
+soundfile>=0.12.1
+numpy>=1.24.0
+
+# Storage
+psycopg2-binary>=2.9.0
+redis>=5.0.0
+pgvector>=0.3.0
+
+# FastAPI server + document parsing
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+gunicorn>=22.0.0
+python-multipart>=0.0.9
+PyPDF2>=3.0.0
+python-docx>=1.1.0
+
+# Proctoring: CV models
+opencv-python-headless>=4.8.0
+deepface>=0.0.79
+pydantic-settings>=2.0.0
+loguru>=0.7.0
+ultralytics>=8.0.0
+tf-keras>=2.16.0

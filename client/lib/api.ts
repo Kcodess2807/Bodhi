@@ -135,6 +135,49 @@ export const getTopics = (company: string, role: string) =>
     `/api/documents/topics?company=${encodeURIComponent(company)}&role=${encodeURIComponent(role)}`
   );
 
+// ── Resumes ──────────────────────────────────────────────
+
+export interface CandidateProfile {
+  name: string;
+  email: string | null;
+  phone: string | null;
+  summary: string | null;
+  skills: string[];
+  experience: Array<{
+    title: string;
+    company: string;
+    duration: string;
+    description: string;
+  }>;
+  education: Array<{
+    degree: string;
+    institution: string;
+    year: string;
+  }>;
+  projects: Array<{
+    name: string;
+    description: string;
+    technologies: string[];
+  }>;
+}
+
+export interface ResumeUploadResponse {
+  user_id: string;
+  profile: CandidateProfile;
+}
+
+export const uploadResume = (file: File) => {
+  const form = new FormData();
+  form.append("file", file);
+  return request<ResumeUploadResponse>("/api/resumes/upload", {
+    method: "POST",
+    body: form,
+  });
+};
+
+export const getResumeProfile = (userId: string) =>
+  request<CandidateProfile>(`/api/resumes/${userId}`);
+
 // ── Interviews ───────────────────────────────────────────
 
 export interface InterviewStart {
@@ -167,6 +210,9 @@ export const startInterview = (data: {
   candidate_name?: string;
   company?: string;
   role?: string;
+  mode?: "option_a" | "option_b";
+  user_id?: string;
+  jd_text?: string;
 }) =>
   request<InterviewStart>("/api/interviews", {
     method: "POST",
@@ -227,6 +273,9 @@ export const startInterviewStream = (data: {
   candidate_name?: string;
   company?: string;
   role?: string;
+  mode?: "option_a" | "option_b";
+  user_id?: string;
+  jd_text?: string;
 }) =>
   fetch(`${BASE}/api/interviews/start-stream`, {
     method: "POST",

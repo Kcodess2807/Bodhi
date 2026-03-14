@@ -5,7 +5,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from src.prompts import build_system_prompt
+from src.prompts import build_jd_targeted_prompt, build_resume_based_prompt, build_system_prompt
 from src.state import InterviewState
 from src.tools import ALL_TOOLS
 
@@ -79,15 +79,35 @@ def build_interview_graph(llm):
     model_with_tools = llm.bind_tools(ALL_TOOLS)
 
     def interviewer_node(state: InterviewState) -> dict:
-        system = build_system_prompt(
-            candidate_name=state["candidate_name"],
-            target_company=state["target_company"],
-            target_role=state["target_role"],
-            current_phase=state["current_phase"],
-            difficulty_level=state["difficulty_level"],
-            entity_context=state.get("entity_context", ""),
-            suggested_topics=state.get("suggested_topics", ""),
-        )
+        mode = state.get("interview_mode", "standard")
+        phase = state["current_phase"]
+        difficulty = state["difficulty_level"]
+
+        if mode == "option_a":
+            system = build_resume_based_prompt(
+                candidate_profile=state.get("candidate_profile") or {},
+                current_phase=phase,
+                difficulty_level=difficulty,
+            )
+        elif mode == "option_b":
+            system = build_jd_targeted_prompt(
+                candidate_profile=state.get("candidate_profile") or {},
+                jd_context=state.get("jd_context") or "",
+                gap_map=state.get("gap_map") or {},
+                current_phase=phase,
+                difficulty_level=difficulty,
+            )
+        else:
+            system = build_system_prompt(
+                candidate_name=state["candidate_name"],
+                target_company=state["target_company"],
+                target_role=state["target_role"],
+                current_phase=phase,
+                difficulty_level=difficulty,
+                entity_context=state.get("entity_context", ""),
+                suggested_topics=state.get("suggested_topics", ""),
+            )
+
         all_messages = [SystemMessage(content=system)] + list(state["messages"])
         response = model_with_tools.invoke(all_messages)
         return {"messages": [response]}

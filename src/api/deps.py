@@ -26,3 +26,7 @@ def get_graph(request: Request):
 
 def get_sarvam_key(request: Request) -> str:
     return request.app.state.sarvam_key
+
+
+def get_llm(request: Request):
+    return request.app.state.llm

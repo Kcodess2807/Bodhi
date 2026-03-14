@@ -1,0 +1,27 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Env files (inject via Vultr env vars or .env at runtime)
+.env
+
+# Frontend (deploy separately or via Vercel)
+client/
+
+# Audio / model artifacts
+*.mp3
+*.wav
+*.pt
+yolov8*.pt
+
+# Dev / docs
+*.md
+.cursor/
+test_*.py

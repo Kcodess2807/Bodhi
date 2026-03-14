@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from langchain_core.messages import HumanMessage
 
-from src.api.deps import get_cache, get_graph, get_sarvam_key, get_storage
+from src.api.deps import get_cache, get_graph, get_llm, get_sarvam_key, get_storage
 from src.api.models import (
     InterviewStartRequest,
     InterviewStartResponse,
@@ -78,6 +78,47 @@ def _load_entity_context(company: str, role: str, cache, storage) -> str:
             ctx_parts.append(rag_ctx)
 
     return "\n".join(ctx_parts)
+
+
+def _load_candidate_context(
+    mode: str,
+    user_id: str | None,
+    jd_text: str | None,
+    storage,
+    llm,
+) -> tuple[dict, str, dict]:
+    """Return (candidate_profile, jd_context, gap_map) for resume-based modes.
+
+    For standard mode returns empty defaults. Raises HTTPException on missing inputs.
+    """
+    if mode == "standard":
+        return {}, "", {}
+
+    if not user_id:
+        raise HTTPException(400, f"user_id is required for mode '{mode}'")
+
+    row = storage.get_user_profile(user_id)
+    if not row:
+        raise HTTPException(404, f"No profile found for user_id '{user_id}'")
+
+    profile = row["professional_summary"]
+
+    if mode == "option_a":
+        return profile, "", {}
+
+    # option_b — needs JD
+    if not jd_text or not jd_text.strip():
+        raise HTTPException(400, "jd_text is required for mode 'option_b'")
+
+    gap_map: dict = {}
+    if llm:
+        try:
+            from src.resume_parser import build_gap_map
+            gap_map = build_gap_map(profile, jd_text, llm)
+        except Exception:
+            gap_map = {}
+
+    return profile, jd_text, gap_map
 
 
 def _load_suggested_topics(company: str, role: str, cache) -> str:
@@ -168,9 +209,13 @@ async def start_interview(
     storage: BodhiStorage = Depends(get_storage),
     cache: BodhiCache | None = Depends(get_cache),
     sarvam_key: str = Depends(get_sarvam_key),
+    llm=Depends(get_llm),
 ):
     session_id = uuid.uuid4().hex[:12]
 
+    candidate_profile, jd_context, gap_map = _load_candidate_context(
+        body.mode, body.user_id, body.jd_text, storage, llm
+    )
     entity_context = _load_entity_context(body.company, body.role, cache, storage)
     suggested_topics = _load_suggested_topics(body.company, body.role, cache)
     
@@ -198,6 +243,10 @@ async def start_interview(
         "entity_context": entity_context,
         "suggested_topics": suggested_topics,
         "should_end": False,
+        "interview_mode": body.mode,
+        "candidate_profile": candidate_profile,
+        "jd_context": jd_context,
+        "gap_map": gap_map,
     }
 
     result = graph.invoke(initial_state, config=graph_config)
@@ -538,11 +587,15 @@ async def start_interview_stream(
     storage: BodhiStorage = Depends(get_storage),
     cache: BodhiCache | None = Depends(get_cache),
     sarvam_key: str = Depends(get_sarvam_key),
+    llm=Depends(get_llm),
 ):
     """Start interview and stream greeting audio as MP3.
     Metadata is returned in response headers."""
     session_id = uuid.uuid4().hex[:12]
 
+    candidate_profile, jd_context, gap_map = _load_candidate_context(
+        body.mode, body.user_id, body.jd_text, storage, llm
+    )
     entity_context = _load_entity_context(body.company, body.role, cache, storage)
     suggested_topics = _load_suggested_topics(body.company, body.role, cache)
 
@@ -570,6 +623,10 @@ async def start_interview_stream(
         "entity_context": entity_context,
         "suggested_topics": suggested_topics,
         "should_end": False,
+        "interview_mode": body.mode,
+        "candidate_profile": candidate_profile,
+        "jd_context": jd_context,
+        "gap_map": gap_map,
     }
 
     result = graph.invoke(initial_state, config=graph_config)

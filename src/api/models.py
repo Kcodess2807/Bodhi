@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -106,6 +107,9 @@ class InterviewStartRequest(BaseModel):
     candidate_name: str = "Candidate"
     company: str = "General"
     role: str = "Software Engineer"
+    mode: Literal["standard", "option_a", "option_b"] = "standard"
+    user_id: str | None = None   # required for option_a and option_b
+    jd_text: str | None = None   # required for option_b (plain-text job description)
 
 
 class InterviewStartResponse(BaseModel):
