@@ -59,6 +59,7 @@ export default function InterviewPage() {
     candidate_name: "",
     company: "",
     role: "Software Engineer",
+    jd_text: "",
   });
 
   // Audio refs
@@ -576,11 +577,11 @@ export default function InterviewPage() {
         setTranscript([
           { speaker: "bodhi", text: meta.text, phase: "intro" },
         ]);
+      }
 
       // Connect proctoring WebSocket (if camera is available)
-      if (referencePhoto) {
-        connectProctoringWs(r.session_id, referencePhoto);
-      }
+      if (referencePhoto && meta.session) {
+        connectProctoringWs(meta.session, referencePhoto);
       }
 
       setPhase("speaking");
@@ -665,6 +666,15 @@ export default function InterviewPage() {
               setStartForm({ ...startForm, role: e.target.value })
             }
             className={inputCls}
+          />
+          <textarea
+            placeholder="Paste Job Description / JD (optional — helps customize interview questions)"
+            value={startForm.jd_text}
+            onChange={(e) =>
+              setStartForm({ ...startForm, jd_text: e.target.value })
+            }
+            rows={4}
+            className={inputCls + " resize-y"}
           />
           <button
             type="submit"

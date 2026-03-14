@@ -91,24 +91,29 @@ def _load_suggested_topics(company: str, role: str, cache) -> str:
 
 _CURRICULUM_PROMPT = """\
 You are an expert technical interviewer preparing a custom interview curriculum.
-Generate exactly 5 targeted questions for each of the following 3 phases for a {role} at {company}.
-Use the provided company profile (tech stack, hiring patterns, description) to make the questions highly specific and realistic.
+Generate exactly 2 targeted questions for each of the following 2 phases for a {role} at {company}.
+Use the provided company profile and job description to make the questions highly specific and realistic.
 
 COMPANY PROFILE:
 {profile_text}
 
+{jd_block}
+
 OUTPUT FORMAT:
-Return a valid JSON object with EXACTLY three keys: "intro", "dsa", "project".
-Each key must contain a list of exactly 5 question strings.
+Return a valid JSON object with EXACTLY two keys: "technical" and "dsa".
+"technical": 2 domain-relevant technical questions (e.g. language internals, framework concepts, system design).
+"dsa": 2 data structures & algorithms questions (e.g. array/tree/graph problems with clear input/output).
+Each key must contain a list of exactly 2 question strings.
 DO NOT include any markdown blocks (like ```json), just raw JSON.
 """
 
-def generate_interview_curriculum(company: str, role: str, storage: BodhiStorage) -> dict:
+def generate_interview_curriculum(company: str, role: str, storage: BodhiStorage, jd_text: str = "") -> dict:
+    """Generate 2 technical + 2 DSA pre-decided questions based on company profile and JD."""
     from src.services.llm import create_llm, _extract_text
     from langchain_core.messages import HumanMessage
     import json
     import logging
-    log = logging.getLogger("bodhi.api.stream")
+    log = logging.getLogger("bodhi.curriculum")
     
     profile_parts = []
     try:
@@ -132,9 +137,16 @@ def generate_interview_curriculum(company: str, role: str, storage: BodhiStorage
     profile_text = "\n".join(filter(None, profile_parts))
     if not profile_text.strip():
         profile_text = "No specific company data available. Generate standard questions."
-        
+    
+    jd_block = ""
+    if jd_text and jd_text.strip():
+        jd_block = f"JOB DESCRIPTION (provided by candidate):\n{jd_text[:8000]}"
+        log.info(f"[CURRICULUM] JD text provided ({len(jd_text)} chars)")
+    
     llm = create_llm(api_key=os.getenv("GOOGLE_API_KEY", ""))
-    prompt = _CURRICULUM_PROMPT.format(role=role, company=company, profile_text=profile_text)
+    prompt = _CURRICULUM_PROMPT.format(
+        role=role, company=company, profile_text=profile_text, jd_block=jd_block
+    )
     
     try:
         response = llm.invoke([HumanMessage(content=prompt)])
@@ -145,20 +157,24 @@ def generate_interview_curriculum(company: str, role: str, storage: BodhiStorage
         
         data = json.loads(raw.strip())
         
-        # DEBUG output to verify ingestion is working!
+        result = {
+            "technical": data.get("technical", [])[:2],
+            "dsa": data.get("dsa", [])[:2],
+        }
+        
+        # DEBUG output
         log.info("==================================================")
-        log.info(f"PRE-GENERATED CURRICULUM FOR {company} {role}")
-        log.info(json.dumps(data, indent=2))
+        log.info(f"PRE-GENERATED CURRICULUM FOR {company} | {role}")
+        log.info(f"  Technical ({len(result['technical'])} Qs): {result['technical']}")
+        log.info(f"  DSA ({len(result['dsa'])} Qs): {result['dsa']}")
+        if jd_text:
+            log.info(f"  JD context: YES ({len(jd_text)} chars)")
         log.info("==================================================")
         
-        return {
-            "intro": data.get("intro", [])[:5],
-            "dsa": data.get("dsa", [])[:5],
-            "project": data.get("project", [])[:5],
-        }
+        return result
     except Exception as e:
         log.error(f"Curriculum generation failed: {e}")
-        return {"intro": [], "dsa": [], "project": []}
+        return {"technical": [], "dsa": []}
 
 
 @router.post("", response_model=InterviewStartResponse, status_code=201)
@@ -174,8 +190,8 @@ async def start_interview(
     entity_context = _load_entity_context(body.company, body.role, cache, storage)
     suggested_topics = _load_suggested_topics(body.company, body.role, cache)
     
-    # 1) Pre-generate 3-phase curriculum based on the extracted profile
-    curriculum = generate_interview_curriculum(body.company, body.role, storage)
+    # Pre-generate curriculum (2 technical + 2 DSA questions)
+    curriculum = generate_interview_curriculum(body.company, body.role, storage, jd_text=body.jd_text)
     if cache:
         for phase, questions in curriculum.items():
             cache.set_question_queue(session_id, phase, questions)
@@ -198,6 +214,8 @@ async def start_interview(
         "entity_context": entity_context,
         "suggested_topics": suggested_topics,
         "should_end": False,
+        "queued_questions": curriculum,
+        "target_question": "",  # intro is ad-hoc, no target question
     }
 
     result = graph.invoke(initial_state, config=graph_config)
@@ -546,8 +564,8 @@ async def start_interview_stream(
     entity_context = _load_entity_context(body.company, body.role, cache, storage)
     suggested_topics = _load_suggested_topics(body.company, body.role, cache)
 
-    # 1) Pre-generate 3-phase curriculum based on the extracted profile
-    curriculum = generate_interview_curriculum(body.company, body.role, storage)
+    # Pre-generate curriculum (2 technical + 2 DSA questions)
+    curriculum = generate_interview_curriculum(body.company, body.role, storage, jd_text=body.jd_text)
     if cache:
         for phase, questions in curriculum.items():
             cache.set_question_queue(session_id, phase, questions)
@@ -570,6 +588,8 @@ async def start_interview_stream(
         "entity_context": entity_context,
         "suggested_topics": suggested_topics,
         "should_end": False,
+        "queued_questions": curriculum,
+        "target_question": "",  # intro is ad-hoc, no target question
     }
 
     result = graph.invoke(initial_state, config=graph_config)

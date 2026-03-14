@@ -7,7 +7,6 @@ venv/
 *.mp3
 *.wav
 .cursor
-TECHNICAL.md
 bodhi.db
 *.md
 .pt

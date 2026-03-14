@@ -227,6 +227,7 @@ export const startInterviewStream = (data: {
   candidate_name?: string;
   company?: string;
   role?: string;
+  jd_text?: string;
 }) =>
   fetch(`${BASE}/api/interviews/start-stream`, {
     method: "POST",

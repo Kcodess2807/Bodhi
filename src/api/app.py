@@ -93,6 +93,7 @@ app.add_middleware(
         "X-Bodhi-End",
         "X-Bodhi-Session",
         "X-Bodhi-Transcript",
+        "X-Bodhi-Curriculum",
     ],
 )
 

@@ -5,7 +5,7 @@ from typing_extensions import TypedDict
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
-PHASES = ("intro", "behavioral", "technical", "coding", "wrapup")
+PHASES = ("intro", "technical", "behavioral", "dsa", "project", "wrapup")
 
 
 class InterviewState(TypedDict):
@@ -22,7 +22,11 @@ class InterviewState(TypedDict):
     target_role: str
     current_phase: str            # one of PHASES
     difficulty_level: int         # 1-5
-    phase_scores: dict            # {"behavioral": {"score": 4, "questions": 3}, ...}
+    phase_scores: dict            # {"technical": {"score": 4, "questions": 3}, ...}
     entity_context: str           # company info loaded from Redis/Neon at session start
     suggested_topics: str         # soft guidance from uploaded documents (cached in Redis)
     should_end: bool
+
+    # ── Pre-generated curriculum queue ────────────────────────────
+    queued_questions: dict        # {"technical": ["Q1", "Q2"], "dsa": ["Q1", "Q2"]}
+    target_question: str          # The specific question Bodhi should ask next, or ""

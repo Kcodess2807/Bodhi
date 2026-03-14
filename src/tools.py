@@ -10,7 +10,7 @@ def transition_phase(next_phase: str) -> str:
     """Move the interview to a new phase.
 
     Args:
-        next_phase: Target phase — one of 'behavioral', 'technical', 'coding', 'wrapup'.
+        next_phase: Target phase — one of 'technical', 'behavioral', 'dsa', 'project', 'wrapup'.
     """
     if next_phase not in PHASES:
         return f"Invalid phase '{next_phase}'. Choose from: {', '.join(PHASES)}"

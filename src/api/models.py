@@ -106,6 +106,7 @@ class InterviewStartRequest(BaseModel):
     candidate_name: str = "Candidate"
     company: str = "General"
     role: str = "Software Engineer"
+    jd_text: str = ""  # Optional job description text for curriculum customization
 
 
 class InterviewStartResponse(BaseModel):
