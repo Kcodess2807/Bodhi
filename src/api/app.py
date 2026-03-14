@@ -70,12 +70,10 @@ async def lifespan(app: FastAPI):
     logger.info("Loading proctoring CV models...")
     try:
         from procturing_backend.services.proctoring.face_detection import FaceDetector
-        from procturing_backend.services.proctoring.identity_detection import IdentityVerifier
         from procturing_backend.services.proctoring.gaze_analysis import GazeAnalyzer
         from procturing_backend.services.proctoring.object_detection import ObjectDetector
 
         app.state.face_detector = FaceDetector()
-        app.state.identity_verifier = IdentityVerifier()
         app.state.gaze_analyzer = GazeAnalyzer()
         app.state.object_detector = ObjectDetector()
         logger.info("✓ Proctoring CV models loaded successfully")
@@ -83,7 +81,6 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠ Proctoring models failed to load: {e}")
         logger.warning("Proctoring features will be unavailable")
         app.state.face_detector = None
-        app.state.identity_verifier = None
         app.state.gaze_analyzer = None
         app.state.object_detector = None
 
@@ -112,6 +109,7 @@ app.add_middleware(
         "X-Bodhi-Session",
         "X-Bodhi-Transcript",
         "X-Bodhi-Curriculum",
+        "X-Bodhi-Sentiment",
     ],
 )
 
@@ -141,7 +139,6 @@ async def health():
         "status": "ok",
         "proctoring_enabled": all([
             hasattr(app.state, "face_detector") and app.state.face_detector is not None,
-            hasattr(app.state, "identity_verifier") and app.state.identity_verifier is not None,
             hasattr(app.state, "gaze_analyzer") and app.state.gaze_analyzer is not None,
             hasattr(app.state, "object_detector") and app.state.object_detector is not None,
         ]),

@@ -99,3 +99,29 @@ class BodhiCache:
         """Store the pre-generated question queue for a session phase (2h TTL)."""
         key = f"interview:{session_id}:queue:{phase}"
         self.r.setex(key, ttl, json.dumps(questions))
+
+    # ── Phase Memory (context memory per phase) ───────────────────
+
+    def save_phase_memory(self, session_id: str, phase: str, memory: dict, ttl: int = 7200) -> None:
+        """Store compacted phase memory summary (2h TTL)."""
+        key = f"memory:{session_id}:{phase}"
+        self.r.setex(key, ttl, json.dumps(memory))
+
+    def get_phase_memory(self, session_id: str, phase: str) -> dict | None:
+        """Retrieve compacted memory for a single phase."""
+        key = f"memory:{session_id}:{phase}"
+        raw = self.r.get(key)
+        if raw is None:
+            return None
+        return json.loads(raw)
+
+    def get_all_phase_memories(self, session_id: str) -> dict:
+        """Retrieve all compacted phase memories for cross-section context."""
+        from src.state import PHASES
+        result = {}
+        for phase in PHASES:
+            mem = self.get_phase_memory(session_id, phase)
+            if mem:
+                result[phase] = mem
+        return result
+

@@ -54,6 +54,32 @@ Upload a PDF/DOCX resume to automatically parse the candidate's professional pro
 1. **Resume-based Interviews**: Highly personalized interviews probing the candidate's specific background and projects.
 2. **JD Gap Analysis**: By providing a Job Description along with the parsed resume, Bodhi generates a gap analysis map and uses it to conduct an interview focused heavily on evaluating the candidate's suitability against the specific job requirements.
 
+### Context Memory & Cross-Questioning
+
+Bodhi maintains **per-phase context memory** that persists across interview sections:
+
+1. **Phase Memory Compaction** — When transitioning between phases (e.g., technical → behavioral), the LLM summarises the completed phase into a compact memory blob: key claims, strengths, weaknesses, and follow-up hooks. Stored in Redis during the session, flushed to NeonDB at session end.
+2. **Cross-Section Referencing** — Compacted memories from all completed phases are injected into the system prompt. Bodhi naturally references earlier answers: *"You mentioned using Redis for caching earlier — how did you handle cache invalidation?"*
+3. **Probing & Challenging** — When a candidate's answer is vague, superficial, or potentially inaccurate, the bot sets `needs_probing=true`. The next turn forces a challenging follow-up before moving on. Examples: *"Why that approach over alternatives?"*, *"Would your solution scale to 10x?"*
+4. **Phase Timing** — Each phase has a target and maximum question count to keep the interview on track (~45 minutes total).
+
+### Multi-Dimensional Scoring & Reports
+
+Every answer is scored across 4 dimensions (1-5 each):
+
+| Metric | What it measures | Weight |
+|--------|-----------------|--------|
+| **Accuracy** | Factual correctness | 30% |
+| **Depth** | Understanding of trade-offs, edge cases, alternatives | 25% |
+| **Communication** | Clarity, structure, conciseness | 20% |
+| **Confidence** | Certainty vs. guessing/bluffing | 15% |
+
+At session end, Bodhi generates a **structured performance report** with:
+- Overall letter grade (A+ to F) and percentage score
+- Per-phase breakdown with dimensional metrics
+- Cross-section insights (contradictions, patterns, probing frequency)
+- Hiring recommendation
+
 ### Current Limitations
 
 - English-only STT (Hinglish/Hindi planned for later).
@@ -233,25 +259,26 @@ The LLM decides when to transition phases using LangGraph tools. The intro phase
 | Tool | What It Does |
 | --- | --- |
 | `transition_phase` | Move to the next interview phase |
-| `score_answer` | Score the candidate's answer (1-5) with reasoning |
+| `score_answer` | Score the candidate's answer on 4 dimensions (accuracy, depth, communication, confidence) with feedback. Can flag for probing. |
 | `adjust_difficulty` | Raise or lower question difficulty (1-5 scale) |
 | `end_interview` | Conclude the interview and trigger session flush |
 
 ### State Management
 
-- **`InterviewState`** (TypedDict): Tracks messages, session ID, candidate info, current phase, difficulty level, phase scores, entity context, suggested topics, and end flag.
+- **`InterviewState`** (TypedDict): Tracks messages, session ID, candidate info, current phase, difficulty level, phase scores, entity context, suggested topics, end flag, **phase memories** (compacted context from completed phases), **pending probes**, **per-question answer scores**, and **phase timing**.
 - **`MemorySaver`**: In-process checkpointing — zero I/O on the voice loop hot path.
-- **Phase-aware system prompts**: The HR persona ("Bodhi") adapts behavior per phase — self-introduction in intro, concept testing in technical, STAR-method in behavioral, algorithm problems in DSA, project deep-dives in project.
+- **Phase-aware system prompts**: The HR persona ("Bodhi") adapts behavior per phase — self-introduction in intro, concept testing in technical, STAR-method in behavioral, algorithm problems in DSA, project deep-dives in project. **Cross-section context and probing directives** are injected dynamically.
 - **Target question queue**: Pre-generated questions are popped from the queue and injected into the system prompt. Bodhi must ask the target question but can do follow-ups first.
 - **Suggested topics**: Soft guidance from uploaded documents — explored naturally, never dictating the flow.
+- **Phase memory compaction**: On phase transitions, the `compact_memory` graph node summarises the completed phase via LLM and stores it for cross-referencing.
 
 ### Three-Tier Storage
 
 | Tier | Technology | Latency | Purpose |
 | --- | --- | --- | --- |
 | **Edge** | `MemorySaver` | 0ms | Full state in RAM during session |
-| **Cache** | Redis | <1ms | Session snapshots, entity context, suggested topics |
-| **Persistent** | NeonDB PostgreSQL | ~50ms | Sessions, transcripts, phase results, entity knowledge, role profiles, vector store |
+| **Cache** | Redis | <1ms | Session snapshots, entity context, suggested topics, **phase memories** |
+| **Persistent** | NeonDB PostgreSQL | ~50ms | Sessions, transcripts, phase results, entity knowledge, role profiles, vector store, **phase memories**, **answer scores** |
 
 ---
 
@@ -263,12 +290,14 @@ Bodhi/
 │   ├── __init__.py
 │   ├── main.py              # CLI entry point — session lifecycle, graph invocation
 │   ├── audio.py             # Mic recording (VAD), playback
-│   ├── state.py             # InterviewState TypedDict, phase definitions
-│   ├── prompts.py           # Phase-aware HR interviewer system prompts
-│   ├── tools.py             # LangGraph tools (transition, score, difficulty, end)
-│   ├── graph.py             # StateGraph construction and compilation
-│   ├── cache.py             # Redis cache layer (BodhiCache)
-│   ├── storage.py           # NeonDB persistence layer (BodhiStorage)
+│   ├── state.py             # InterviewState TypedDict, phase definitions, PHASE_CONFIG timing
+│   ├── prompts.py           # Phase-aware system prompts with cross-section context & probing rules
+│   ├── tools.py             # LangGraph tools (transition, multi-dimensional score, difficulty, end)
+│   ├── graph.py             # StateGraph with compact_memory node and conditional routing
+│   ├── memory.py            # Phase memory compaction, cross-section context builder, Neon flusher
+│   ├── report.py            # Structured performance report generation (grades, metrics, insights)
+│   ├── cache.py             # Redis cache layer (BodhiCache) + phase memory caching
+│   ├── storage.py           # NeonDB persistence layer (BodhiStorage) + phase_memories & answer_scores
 │   ├── rag.py               # RAG: chunking, embedding, ingestion, retrieval, topic extraction
 │   ├── embeddings.py        # Google gemini-embedding-001 wrapper (3072-dim)
 │   ├── document_parser.py   # PDF/DOCX/TXT text extraction
@@ -276,6 +305,7 @@ Bodhi/
 │   │   ├── __init__.py
 │   │   ├── app.py           # FastAPI app, lifespan, CORS
 │   │   ├── deps.py          # Dependency injection (storage, cache, graph)
+│   │   ├── auth.py          # Clerk JWT verification (dev-mode bypass)
 │   │   ├── models.py        # Pydantic request/response schemas
 │   │   ├── roles.py         # /api/roles CRUD
 │   │   ├── companies.py     # /api/companies CRUD
@@ -317,6 +347,12 @@ Bodhi/
 - [x] Interview Hub: curriculum pre-generation (2 technical + 2 DSA questions), JD intake, target question queue
 - [x] Company profile enrichment from uploaded documents
 - [x] Resume parsing and gap analysis
+- [x] **Context Memory System**: Per-phase memory compaction, cross-section context injection, follow-up hooks
+- [x] **Multi-Dimensional Scoring**: 4-axis rubric (accuracy, depth, communication, confidence) with weighted composite
+- [x] **Cross-Questioning & Probing**: Automatic follow-up challenges on vague/suspicious answers
+- [x] **Structured Reports**: Letter grades, per-phase breakdown, cross-section insights, hiring recommendations
+- [x] **Phase Timing**: Target/max question budgets per phase (~45 min total)
+- [x] **Clerk Auth**: JWT verification with dev-mode bypass
 
 ### Next
 

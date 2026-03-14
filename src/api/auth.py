@@ -32,6 +32,9 @@ def _get_jwks_client() -> jwt.PyJWKClient:
     return _jwks_client
 
 
+_CLERK_CONFIGURED = bool(os.getenv("CLERK_FRONTEND_API_URL", "").strip())
+
+
 def verify_clerk_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(_security),
 ) -> dict:
@@ -39,8 +42,9 @@ def verify_clerk_token(
 
     Returns an empty dict if no credentials are provided (allows
     endpoints to be optionally authenticated).
+    When Clerk is not configured, always returns an empty dict (dev mode).
     """
-    if credentials is None:
+    if not _CLERK_CONFIGURED or credentials is None:
         return {}
 
     token = credentials.credentials
@@ -66,10 +70,16 @@ def require_auth(
 ) -> str:
     """Require authentication — returns the Clerk user_id (sub claim).
 
-    Raises 401 if no valid token is present.
+    In development (no CLERK_FRONTEND_API_URL set), returns 'anonymous'
+    so endpoints work without a Clerk token.
+    In production (Clerk configured), raises 401 if no valid token.
     """
     user_id = claims.get("sub", "")
     if not user_id:
+        if not _CLERK_CONFIGURED:
+            # Dev mode — allow unauthenticated access
+            logger.debug("Auth bypassed (Clerk not configured) — using 'anonymous'")
+            return "anonymous"
         raise HTTPException(status_code=401, detail="Authentication required")
     return user_id
 

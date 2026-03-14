@@ -7,6 +7,17 @@ from langgraph.graph.message import add_messages
 
 PHASES = ("intro", "technical", "behavioral", "dsa", "project", "wrapup")
 
+# ── Phase timing and question budget configuration ─────────────────────────
+PHASE_CONFIG: dict[str, dict] = {
+    "intro":      {"target_questions": 3,  "max_questions": 4,  "target_minutes": 3},
+    "technical":  {"target_questions": 5,  "max_questions": 7,  "target_minutes": 12},
+    "behavioral": {"target_questions": 4,  "max_questions": 5,  "target_minutes": 8},
+    "dsa":        {"target_questions": 3,  "max_questions": 4,  "target_minutes": 10},
+    "project":    {"target_questions": 3,  "max_questions": 4,  "target_minutes": 8},
+    "wrapup":     {"target_questions": 2,  "max_questions": 3,  "target_minutes": 4},
+}
+# Total target: ~45 minutes across all phases
+
 
 class InterviewState(TypedDict, total=False):
     """LangGraph state for a single interview session.
@@ -40,3 +51,10 @@ class InterviewState(TypedDict, total=False):
     candidate_profile: dict       # parsed resume profile (option_a / option_b)
     jd_context: str               # job description text (option_b)
     gap_map: dict                 # {strong_match, partial_match, gaps} (option_b, internal)
+
+    # ── Phase memory & timing (NEW) ────────────────────────────────
+    phase_memories: dict          # {phase: compacted_memory_dict} from completed phases
+    phase_question_count: int     # questions asked in current phase so far
+    phase_start_time: str         # ISO timestamp when current phase started
+    pending_probe: str            # if set, bot MUST ask this follow-up before next question
+    answer_scores: list           # [{phase, question_num, accuracy, depth, communication, confidence, feedback}, ...]

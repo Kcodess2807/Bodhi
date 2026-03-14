@@ -29,6 +29,13 @@ python-docx>=1.1.0
 # Proctoring: CV models
 opencv-python>=4.8.0
 
+# Behavioral analysis: HuggingFace models + audio features + pose
+transformers>=4.40.0
+torch>=2.2.0
+sentencepiece>=0.2.0
+librosa>=0.10.0
+mediapipe>=0.10.0
+
 # Clerk JWT verification
 pyjwt[crypto]>=2.8.0
 deepface>=0.0.79

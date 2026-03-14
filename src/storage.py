@@ -91,11 +91,38 @@ CREATE TABLE IF NOT EXISTS role_profiles (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS phase_memories (
+    id          SERIAL PRIMARY KEY,
+    session_id  TEXT NOT NULL REFERENCES sessions(id),
+    phase       TEXT NOT NULL,
+    summary     JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(session_id, phase)
+);
+
+CREATE TABLE IF NOT EXISTS answer_scores (
+    id            SERIAL PRIMARY KEY,
+    session_id    TEXT NOT NULL REFERENCES sessions(id),
+    phase         TEXT NOT NULL,
+    question_num  INT NOT NULL,
+    accuracy      INT,
+    depth         INT,
+    communication INT,
+    confidence    INT,
+    composite     REAL,
+    feedback      TEXT,
+    probed        BOOLEAN DEFAULT FALSE,
+    probe_reason  TEXT DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_transcripts_session ON transcripts(session_id);
 CREATE INDEX IF NOT EXISTS idx_phase_results_session ON phase_results(session_id);
 CREATE INDEX IF NOT EXISTS idx_entities_company ON entities(company_name);
 CREATE INDEX IF NOT EXISTS idx_company_docs_lookup ON company_documents(company_name, role);
 CREATE INDEX IF NOT EXISTS idx_role_profiles_name ON role_profiles(role_name);
+CREATE INDEX IF NOT EXISTS idx_phase_memories_session ON phase_memories(session_id);
+CREATE INDEX IF NOT EXISTS idx_answer_scores_session ON answer_scores(session_id);
 """
 
 
@@ -294,6 +321,68 @@ class BodhiStorage:
                     difficulty_reached,
                     json.dumps(feedback or []),
                 ),
+            )
+
+    # ── Phase memories (compacted context) ─────────────────────────
+
+    def save_phase_memory(
+        self,
+        session_id: str,
+        phase: str,
+        memory: dict,
+    ) -> None:
+        """Persist a compacted phase memory summary."""
+        self._ensure_conn()
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO phase_memories (session_id, phase, summary) "
+                "VALUES (%s, %s, %s) "
+                "ON CONFLICT (session_id, phase) DO UPDATE SET summary = EXCLUDED.summary",
+                (session_id, phase, json.dumps(memory)),
+            )
+
+    def get_phase_memories(self, session_id: str) -> dict:
+        """Load all phase memories for a session from Neon."""
+        self._ensure_conn()
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT phase, summary FROM phase_memories WHERE session_id = %s",
+                (session_id,),
+            )
+            result = {}
+            for row in cur.fetchall():
+                summary = row["summary"]
+                if isinstance(summary, str):
+                    summary = json.loads(summary)
+                result[row["phase"]] = summary
+            return result
+
+    # ── Answer scores (granular per-question scores) ───────────────
+
+    def save_answer_score(
+        self,
+        session_id: str,
+        phase: str,
+        question_num: int,
+        accuracy: int,
+        depth: int,
+        communication: int,
+        confidence: int,
+        composite: float,
+        feedback: str = "",
+        probed: bool = False,
+        probe_reason: str = "",
+    ) -> None:
+        """Persist a single answer score."""
+        self._ensure_conn()
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO answer_scores "
+                "(session_id, phase, question_num, accuracy, depth, communication, "
+                "confidence, composite, feedback, probed, probe_reason) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (session_id, phase, question_num, accuracy, depth,
+                 communication, confidence, composite, feedback, probed, probe_reason),
             )
 
     # ── Entities ──────────────────────────────────────────────────

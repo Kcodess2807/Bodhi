@@ -7,6 +7,7 @@ from typing import AsyncIterator
 
 import sounddevice as sd
 import soundfile as sf
+import websockets.exceptions
 from sarvamai import SarvamAI
 
 
@@ -262,15 +263,24 @@ async def tts_stream_sentences(
                             sentence = sentence.strip()
                             if not sentence:
                                 continue
-                            await ws.convert(sentence)
-                            sent_count += 1
-                            log.info("[TTS-PIPE] Sent sentence #%d (%d chars): %s",
-                                     sent_count, len(sentence), sentence[:60])
+                            try:
+                                await ws.convert(sentence)
+                                sent_count += 1
+                                log.info("[TTS-PIPE] Sent sentence #%d (%d chars): %s",
+                                         sent_count, len(sentence), sentence[:60])
+                            except websockets.exceptions.ConnectionClosed:
+                                log.warning("[TTS-PIPE] Connection closed while sending sentence")
+                                break
+                        
+                        try:
+                            await ws.flush()
+                            log.info("[TTS-PIPE] All %d sentences sent + flushed", sent_count)
+                        except websockets.exceptions.ConnectionClosed:
+                            log.warning("[TTS-PIPE] Connection closed while flushing")
+                    except asyncio.CancelledError:
+                        log.debug("[TTS-PIPE] Producer task cancelled")
                     except Exception as e:
                         log.error("[TTS-PIPE] Sentence producer error: %s", e)
-                    finally:
-                        await ws.flush()
-                        log.info("[TTS-PIPE] All %d sentences sent + flushed", sent_count)
 
                 # Start producer as a background task
                 producer = asyncio.create_task(_send_sentences())
@@ -278,22 +288,29 @@ async def tts_stream_sentences(
                 # Consumer: yield audio chunks as they arrive
                 chunk_count = 0
                 total_bytes = 0
-                async for message in ws:
-                    if isinstance(message, AudioOutput):
-                        audio_bytes = base64.b64decode(message.data.audio)
-                        chunk_count += 1
-                        total_bytes += len(audio_bytes)
-                        log.debug("[TTS-PIPE] Audio chunk #%d: %d bytes", chunk_count, len(audio_bytes))
-                        yield audio_bytes
-                    elif isinstance(message, EventResponse):
-                        log.info("[TTS-PIPE] Completion event received")
-                        break
-                    elif isinstance(message, ErrorResponse):
-                        log.error("[TTS-PIPE] TTS error: %s", message)
-                        break
+                try:
+                    async for message in ws:
+                        if isinstance(message, AudioOutput):
+                            audio_bytes = base64.b64decode(message.data.audio)
+                            chunk_count += 1
+                            total_bytes += len(audio_bytes)
+                            log.debug("[TTS-PIPE] Audio chunk #%d: %d bytes", chunk_count, len(audio_bytes))
+                            yield audio_bytes
+                        elif isinstance(message, EventResponse):
+                            log.info("[TTS-PIPE] Completion event received")
+                            break
+                        elif isinstance(message, ErrorResponse):
+                            log.error("[TTS-PIPE] TTS error: %s", message)
+                            break
+                finally:
+                    # Cancel producer if it's still running when we finish or error out
+                    if not producer.done():
+                        producer.cancel()
+                        try:
+                            await producer
+                        except asyncio.CancelledError:
+                            pass
 
-                # Ensure producer is done
-                await producer
                 log.info("[TTS-PIPE] Done: %d chunks, %d bytes total", chunk_count, total_bytes)
                 break  # Success
 

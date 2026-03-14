@@ -588,9 +588,13 @@ def _flush_session_sync(
 
 # ── Streaming endpoints ───────────────────────────────────────────
 
+import json as _json
 import re
 import asyncio
 import logging
+from typing import Optional
+
+from src.services.sentiment import analyze_tone as _analyze_tone
 
 _stream_log = logging.getLogger("bodhi.api.stream")
 
@@ -921,13 +925,14 @@ async def send_message_stream(
 async def send_audio_stream(
     session_id: str,
     file: UploadFile = File(...),
+    image_file: Optional[UploadFile] = File(None),
     user_id: str = Depends(require_auth),
     graph=Depends(get_graph),
     storage: BodhiStorage = Depends(get_storage),
     cache: BodhiCache | None = Depends(get_cache),
     sarvam_key: str = Depends(get_sarvam_key),
 ):
-    """Upload WAV audio and stream reply audio as MP3 (low-latency pipeline)."""
+    """Upload WAV audio (+ optional webcam frame) and stream reply audio as MP3."""
     graph_config = {"configurable": {"thread_id": session_id}}
 
     try:
@@ -943,6 +948,8 @@ async def send_audio_stream(
     if not audio_bytes or len(audio_bytes) < 1000:
         raise HTTPException(400, "Audio file too small or empty")
 
+    image_bytes = (await image_file.read()) if image_file else None
+
     if not sarvam_key:
         raise HTTPException(500, "SARVAM_API_KEY not configured")
 
@@ -955,6 +962,62 @@ async def send_audio_stream(
     if not transcript:
         raise HTTPException(422, "Could not transcribe audio")
 
+    # ── Sentiment analysis ────────────────────────────────────────────────────
+    loop = asyncio.get_running_loop()
+    sentiment_payload: dict = {}
+
+    try:
+        # Rule-based (~1ms, always runs)
+        rb = _analyze_tone(transcript, audio_bytes)
+        sentiment_payload = rb.to_dict()
+
+        # HuggingFace speech emotion in thread pool (~300ms)
+        async def _hf_analysis():
+            try:
+                from behavioral_analysis.services.speech_service import analyze_speech
+                return await loop.run_in_executor(
+                    None, lambda: analyze_speech(audio_bytes, file.filename or "audio.wav")
+                )
+            except Exception as e:
+                _stream_log.warning("HF speech analysis failed: %s", e)
+                return {}
+
+        # MediaPipe posture in thread pool (~100ms, only when frame sent)
+        async def _posture_analysis():
+            if not image_bytes:
+                return {}
+            try:
+                from behavioral_analysis.services.posture_service import analyze_posture
+                return await loop.run_in_executor(None, lambda: analyze_posture(image_bytes))
+            except Exception as e:
+                _stream_log.warning("Posture analysis failed: %s", e)
+                return {}
+
+        hf_result, posture_result = await asyncio.gather(_hf_analysis(), _posture_analysis())
+
+        if hf_result:
+            sentiment_payload.update({
+                "hf_emotion":       hf_result.get("emotion"),
+                "hf_confidence":    hf_result.get("emotion_confidence"),
+                "sentiment":        hf_result.get("sentiment"),
+                "pitch_variance":   hf_result.get("pitch_variance"),
+                "confidence_score": hf_result.get("confidence_score"),
+                "flags":            hf_result.get("flags", []),
+            })
+        if posture_result:
+            sentiment_payload.update({
+                "posture":         posture_result.get("posture"),
+                "head_tilt_angle": posture_result.get("head_tilt_angle"),
+                "gaze_direction":  posture_result.get("gaze_direction"),
+                "spine_score":     posture_result.get("spine_score"),
+                "face_visible":    posture_result.get("face_visible"),
+                "posture_flags":   posture_result.get("flags", []),
+            })
+    except Exception as e:
+        _stream_log.error("Sentiment block failed: %s", e)
+
+    # ── Build streaming response ──────────────────────────────────────────────
+
     result_holder: dict = {}
 
     async def _gen():
@@ -962,7 +1025,6 @@ async def send_audio_stream(
             graph, graph_config, transcript, sarvam_key, result_holder
         ):
             yield chunk
-        # Post-stream: cache update
         if cache:
             try:
                 st = graph.get_state(graph_config)
@@ -981,6 +1043,7 @@ async def send_audio_stream(
         Transcript=transcript,
         Phase="streaming",
         End="false",
+        Sentiment=_json.dumps(sentiment_payload),
     )
 
     return StreamingResponse(

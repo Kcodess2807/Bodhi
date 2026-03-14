@@ -22,7 +22,7 @@ PHASE_INSTRUCTIONS: dict[str, str] = {
         "Focus on core concepts, language-specific knowledge, and practical "
         "understanding. For frontend roles: JavaScript, React, CSS, browser APIs. "
         "For backend roles: Node.js, databases, system internals, APIs.\n"
-        "After each answer, call score_answer with a 1-5 rating and brief feedback.\n"
+        "After each answer, call score_answer with dimensional ratings and feedback.\n"
         "When you have asked 3-5 questions and have enough signal, call "
         "transition_phase('behavioral')."
     ),
@@ -32,7 +32,7 @@ PHASE_INSTRUCTIONS: dict[str, str] = {
         "answers — ask for specific examples, timelines, and measurable outcomes.\n"
         "Cover: leadership, teamwork, conflict resolution, ownership, and "
         "handling ambiguity.\n"
-        "After each answer, call score_answer with a 1-5 rating and brief feedback.\n"
+        "After each answer, call score_answer with dimensional ratings and feedback.\n"
         "When you have asked 3-4 questions and have enough signal, call "
         "transition_phase('dsa')."
     ),
@@ -43,7 +43,7 @@ PHASE_INSTRUCTIONS: dict[str, str] = {
         "and expected time/space complexity. If the candidate is stuck, give hints "
         "(nudges), NOT answers.\n"
         "Evaluate their approach, edge-case thinking, and complexity analysis.\n"
-        "After each answer, call score_answer with a 1-5 rating and brief feedback.\n"
+        "After each answer, call score_answer with dimensional ratings and feedback.\n"
         "When you have asked 2-4 questions and have enough signal, call "
         "transition_phase('project')."
     ),
@@ -54,7 +54,7 @@ PHASE_INSTRUCTIONS: dict[str, str] = {
         "- What trade-offs did they make? What would they change?\n"
         "- What was the hardest technical challenge they overcame?\n"
         "- How did they measure success?\n"
-        "After each answer, call score_answer with a 1-5 rating and brief feedback.\n"
+        "After each answer, call score_answer with dimensional ratings and feedback.\n"
         "When you have asked 2-3 questions and have enough signal, call "
         "transition_phase('wrapup')."
     ),
@@ -66,6 +66,38 @@ PHASE_INSTRUCTIONS: dict[str, str] = {
         "When finished, call end_interview with a final summary."
     ),
 }
+
+# ── Probing rules appended to every prompt ───────────────────────────────────
+
+_PROBING_RULES = """
+PROBING & CROSS-QUESTIONING RULES:
+- After scoring each answer, if the candidate's response was vague, superficial,
+  or potentially inaccurate, set needs_probing=true in score_answer and provide
+  a probe_reason. You will then receive a pending_probe instruction.
+- When a pending_probe is set, you MUST ask a challenging follow-up BEFORE moving
+  to the next question. Examples:
+  * "You mentioned X — can you walk me through the specific implementation?"
+  * "Why did you choose that approach over alternatives like Y?"
+  * "What would happen if the scale was 10x — would your solution still work?"
+  * "That's interesting — but what about edge case Z?"
+- CROSS-REFERENCE previous phases:
+  * "Earlier you said you used Redis for caching — how did you handle cache invalidation?"
+  * "In the technical round you struggled with indexing — how did you handle query performance in your project?"
+- CHALLENGE suspicious answers:
+  * If the candidate seems to be guessing (low confidence score), probe: "You seem unsure — can you elaborate on why you chose that approach?"
+  * If accuracy seems high but depth is low, dig deeper into WHY and HOW
+  * Ask "why not X?" to test if they considered alternatives
+
+SCORING RULES:
+- Use score_answer after EVERY candidate response (except in intro phase).
+- Rate each dimension independently (1-5):
+  * accuracy: Is the answer factually correct?
+  * depth: Does the candidate show deep understanding (trade-offs, edge cases, alternatives)?
+  * communication: Is the explanation clear, structured, and concise?
+  * confidence: Does the candidate seem certain, or is guessing/bluffing?
+- If ANY dimension scores <= 2, set needs_probing=true.
+"""
+
 
 INTERVIEWER_BASE = """\
 You are **Bodhi**, a professional mock interviewer. You conduct realistic, \
@@ -85,19 +117,24 @@ SESSION CONTEXT:
 - Role: {target_role}
 - Current phase: {current_phase}
 - Difficulty: {difficulty_level}/5
+- Questions asked in this phase: {questions_asked}/{target_questions} (max {max_questions})
 {entity_block}
 
 PHASE INSTRUCTIONS:
 {phase_instructions}
 
 {target_question_block}
+{cross_section_block}
+{probe_block}
 
 TOOLS:
 You have tools to control the interview flow. Use them proactively:
 - transition_phase: move to the next interview section when ready
-- score_answer: rate the candidate's last answer (1-5) with feedback
+- score_answer: rate the candidate's last answer with dimensional scores (accuracy, depth, communication, confidence) AND feedback. Set needs_probing=true if the answer needs challenging.
 - adjust_difficulty: raise or lower question difficulty
 - end_interview: wrap up the session with a summary
+
+{probing_rules}
 
 RULES:
 - Ask ONE question at a time. Wait for the candidate to respond.
@@ -105,6 +142,8 @@ RULES:
 - Do NOT reveal scores to the candidate mid-interview.
 - Do NOT answer your own questions.
 - Your FIRST message in the intro phase must NOT be a question — greet and ask the candidate to introduce themselves.
+- When questions_asked reaches target_questions, consider transitioning to the next phase.
+- When questions_asked reaches max_questions, you MUST transition immediately.
 """
 
 
@@ -112,12 +151,13 @@ def build_resume_based_prompt(
     candidate_profile: dict,
     current_phase: str,
     difficulty_level: int,
+    cross_section_context: str = "",
+    pending_probe: str = "",
+    questions_asked: int = 0,
+    target_questions: int = 5,
+    max_questions: int = 7,
 ) -> str:
-    """System prompt for option_a: Resume-Based Personal Interview.
-
-    Questions are weighted by seniority level and probe the candidate's
-    own claims — achievements (40%), technical skills (35%), behavioral (25%).
-    """
+    """System prompt for option_a: Resume-Based Personal Interview."""
     seniority = candidate_profile.get("seniority_level") or "mid"
     name = candidate_profile.get("full_name") or "the candidate"
     domain = candidate_profile.get("primary_domain") or "Software Engineering"
@@ -125,7 +165,6 @@ def build_resume_based_prompt(
     achievements = candidate_profile.get("key_achievements") or []
     tech_skills = candidate_profile.get("technical_skills") or []
 
-    # Seniority-specific focus guidance
     seniority_focus = {
         "intern": "Focus on fundamentals, learning mindset, and academic projects.",
         "junior": "Focus on fundamentals, first real-world projects, and growth areas.",
@@ -146,6 +185,18 @@ def build_resume_based_prompt(
     achievements_block = "\n".join(f"  - {a}" for a in achievements[:5]) if achievements else "  (none listed)"
     skills_block = ", ".join(tech_skills[:15]) if tech_skills else "(none listed)"
 
+    cross_block = ""
+    if cross_section_context:
+        cross_block = f"\nCROSS-SECTION CONTEXT (from previous phases):\n{cross_section_context}"
+
+    probe_block = ""
+    if pending_probe:
+        probe_block = (
+            f"\n⚠️ PENDING PROBE — You MUST ask a challenging follow-up about:\n"
+            f"{pending_probe}\n"
+            f"Do NOT move to a new question until you have probed this.\n"
+        )
+
     return f"""\
 You are an expert technical interviewer conducting a realistic mock interview.
 
@@ -165,22 +216,19 @@ QUESTION WEIGHTING:
 - 35% probe technical skills — depth check on claimed tools/languages/frameworks
 - 25% behavioral — STAR method, leadership, ownership, conflict
 
-RULES:
-- Ask ONE focused question at a time. Never stack questions.
-- Never ask about skills or domains NOT in this profile.
-- If an answer is vague, follow up: "Can you walk me through a specific example?"
-- After each answer, internally assess clarity, specificity, and credibility (1–5).
-  Do NOT share your score with the candidate.
-- Keep a professional but warm tone.
-- After 8–10 questions, offer a concise session debrief: strengths and growth areas.
+- Questions asked in this phase: {questions_asked}/{target_questions} (max {max_questions})
 - Current phase: {current_phase} | Difficulty: {difficulty_level}/5
 
 PHASE INSTRUCTIONS:
 {phase_instructions}
+{cross_block}
+{probe_block}
+
+{_PROBING_RULES}
 
 TOOLS:
 - transition_phase: move to the next section when ready
-- score_answer: rate the candidate's last answer (1-5) with feedback
+- score_answer: rate with dimensional scores (accuracy, depth, communication, confidence) + feedback + needs_probing flag
 - adjust_difficulty: raise or lower question difficulty
 - end_interview: conclude the session with a debrief summary
 """
@@ -192,12 +240,13 @@ def build_jd_targeted_prompt(
     gap_map: dict,
     current_phase: str,
     difficulty_level: int,
+    cross_section_context: str = "",
+    pending_probe: str = "",
+    questions_asked: int = 0,
+    target_questions: int = 5,
+    max_questions: int = 7,
 ) -> str:
-    """System prompt for option_b: Company/Role-Targeted Interview.
-
-    Questions sit at the intersection of who the candidate IS and what the
-    ROLE requires. The hidden gap_map steers question weighting toward gaps.
-    """
+    """System prompt for option_b: Company/Role-Targeted Interview."""
     seniority = candidate_profile.get("seniority_level") or "mid"
     name = candidate_profile.get("full_name") or "the candidate"
     domain = candidate_profile.get("primary_domain") or "Software Engineering"
@@ -208,7 +257,6 @@ def build_jd_targeted_prompt(
     partial = gap_map.get("partial_match") or []
     gaps = gap_map.get("gaps") or []
 
-    # Seniority-based interview style
     style_map = {
         "intern": "Focus on fundamentals and potential.",
         "junior": "Technical depth on basics + delivery ownership.",
@@ -231,6 +279,18 @@ def build_jd_targeted_prompt(
     strong_block = ", ".join(strong) if strong else "none identified"
     partial_block = ", ".join(partial) if partial else "none identified"
     gaps_block = ", ".join(gaps) if gaps else "none identified"
+
+    cross_block = ""
+    if cross_section_context:
+        cross_block = f"\nCROSS-SECTION CONTEXT (from previous phases):\n{cross_section_context}"
+
+    probe_block = ""
+    if pending_probe:
+        probe_block = (
+            f"\n⚠️ PENDING PROBE — You MUST ask a challenging follow-up about:\n"
+            f"{pending_probe}\n"
+            f"Do NOT move to a new question until you have probed this.\n"
+        )
 
     return f"""\
 You are a senior hiring manager conducting a realistic mock interview for the role described below.
@@ -255,21 +315,19 @@ GAP ANALYSIS:
 
 INTERVIEW STYLE FOR THIS SENIORITY: {interview_style}
 
-RULES:
-- Ask ONE question at a time. Never reveal scores or the gap analysis.
-- Prioritize gap areas — if the JD demands a skill not in the profile, probe:
-  "This role involves X — have you had exposure to that?"
-- For strong matches, probe for mastery, not basics.
-- After 8–10 exchanges, give a hiring-lens debrief: would you advance this candidate?
-  What gaps remain? What should they prepare before the real interview?
+- Questions asked in this phase: {questions_asked}/{target_questions} (max {max_questions})
 - Current phase: {current_phase} | Difficulty: {difficulty_level}/5
 
 PHASE INSTRUCTIONS:
 {phase_instructions}
+{cross_block}
+{probe_block}
+
+{_PROBING_RULES}
 
 TOOLS:
 - transition_phase: move to the next section when ready
-- score_answer: rate the candidate's last answer (1-5) with feedback
+- score_answer: rate with dimensional scores (accuracy, depth, communication, confidence) + feedback + needs_probing flag
 - adjust_difficulty: raise or lower question difficulty
 - end_interview: conclude with a hiring-lens debrief
 """
@@ -284,6 +342,11 @@ def build_system_prompt(
     entity_context: str = "",
     suggested_topics: str = "",
     target_question: str = "",
+    cross_section_context: str = "",
+    pending_probe: str = "",
+    questions_asked: int = 0,
+    target_questions: int = 5,
+    max_questions: int = 7,
 ) -> str:
     """Assemble the full system prompt from current interview state."""
     phase_instructions = PHASE_INSTRUCTIONS.get(current_phase, "")
@@ -316,6 +379,20 @@ def build_system_prompt(
             "current topic, call score_answer, and you will receive the next target question."
         )
 
+    # Cross-section context from compacted phase memories
+    cross_section_block = ""
+    if cross_section_context:
+        cross_section_block = f"\nCROSS-SECTION CONTEXT (from previous phases):\n{cross_section_context}"
+
+    # Probing directive
+    probe_block = ""
+    if pending_probe:
+        probe_block = (
+            f"\n⚠️ PENDING PROBE — You MUST ask a challenging follow-up about:\n"
+            f"{pending_probe}\n"
+            f"Do NOT move to a new question until you have probed this.\n"
+        )
+
     return INTERVIEWER_BASE.format(
         candidate_name=candidate_name,
         target_company=target_company,
@@ -325,4 +402,10 @@ def build_system_prompt(
         entity_block=entity_block,
         phase_instructions=phase_instructions,
         target_question_block=target_question_block,
+        cross_section_block=cross_section_block,
+        probe_block=probe_block,
+        probing_rules=_PROBING_RULES,
+        questions_asked=questions_asked,
+        target_questions=target_questions,
+        max_questions=max_questions,
     )
