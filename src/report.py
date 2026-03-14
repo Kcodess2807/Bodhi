@@ -37,6 +37,9 @@ def generate_report(
     phase_memories: dict,
     answer_scores: list[dict],
     phase_scores: dict,
+    proctoring_violations: list[dict] | None = None,
+    sentiment_data: list[dict] | None = None,
+    session_info: dict | None = None,
 ) -> dict:
     """Build a structured performance report from session data.
 
@@ -44,10 +47,13 @@ def generate_report(
         phase_memories: {phase: compacted_memory_dict} from compact_phase().
         answer_scores: List of per-question score dicts from InterviewState.
         phase_scores: {phase: {total_score, questions, feedback}} from InterviewState.
+        proctoring_violations: List of proctoring violation dicts from database.
+        sentiment_data: List of sentiment analysis dicts from database.
+        session_info: Basic session information (candidate name, company, role, etc.).
 
     Returns:
         A structured report dict with overall grade, phase breakdown,
-        cross-section insights, and improvement areas.
+        cross-section insights, proctoring summary, behavioral analysis, and improvement areas.
     """
     phase_breakdown: dict[str, dict] = {}
     all_strengths: list[str] = []
@@ -101,8 +107,14 @@ def generate_report(
     # ── Cross-section insights ────────────────────────────────────
     cross_insights = _build_cross_insights(phase_memories, answer_scores)
 
+    # ── Proctoring summary ────────────────────────────────────────
+    proctoring_summary = _build_proctoring_summary(proctoring_violations or [])
+
+    # ── Behavioral analysis ───────────────────────────────────────
+    behavioral_summary = _build_behavioral_summary(sentiment_data or [])
+
     # ── Hiring recommendation ─────────────────────────────────────
-    recommendation = _hiring_recommendation(overall_pct, phase_breakdown)
+    recommendation = _hiring_recommendation(overall_pct, phase_breakdown, proctoring_summary)
 
     report = {
         "overall_grade": overall_grade,
@@ -112,7 +124,10 @@ def generate_report(
         "top_strengths": list(dict.fromkeys(all_strengths))[:5],
         "top_improvements": list(dict.fromkeys(all_weaknesses))[:5],
         "cross_section_insights": cross_insights,
+        "proctoring_summary": proctoring_summary,
+        "behavioral_summary": behavioral_summary,
         "hiring_recommendation": recommendation,
+        "session_info": session_info or {},
     }
 
     log.info("[REPORT] Generated report: %s (%s%%), %d questions across %d phases",
@@ -175,8 +190,16 @@ def _build_cross_insights(phase_memories: dict, answer_scores: list[dict]) -> li
     return insights[:5]
 
 
-def _hiring_recommendation(overall_pct: float, phase_breakdown: dict) -> str:
-    """Generate a hiring recommendation based on overall performance."""
+def _hiring_recommendation(overall_pct: float, phase_breakdown: dict, proctoring_summary: dict) -> str:
+    """Generate a hiring recommendation based on overall performance and proctoring."""
+    # Check for critical proctoring issues
+    if proctoring_summary.get("session_flagged", False):
+        return "Interview flagged due to proctoring violations. Manual review required before proceeding."
+    
+    high_violations = proctoring_summary.get("high_severity_count", 0)
+    if high_violations >= 3:
+        return "Multiple high-severity proctoring violations detected. Recommend re-interview under stricter monitoring."
+    
     if overall_pct >= 80:
         return "Strong candidate. Recommend advancing to the next round."
     elif overall_pct >= 65:
@@ -191,3 +214,114 @@ def _hiring_recommendation(overall_pct: float, phase_breakdown: dict) -> str:
         return "Average performance. Recommend additional preparation before re-interviewing."
     else:
         return "Below expectations. Significant improvement needed across multiple areas."
+
+
+
+def _build_proctoring_summary(violations: list[dict]) -> dict:
+    """Build a summary of proctoring violations."""
+    if not violations:
+        return {
+            "total_violations": 0,
+            "session_flagged": False,
+            "high_severity_count": 0,
+            "medium_severity_count": 0,
+            "low_severity_count": 0,
+            "violation_types": {},
+            "timeline": [],
+        }
+    
+    severity_counts = {"high": 0, "medium": 0, "low": 0}
+    violation_types = {}
+    
+    for v in violations:
+        severity = v.get("severity", "low")
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        
+        v_type = v.get("violation_type", "unknown")
+        violation_types[v_type] = violation_types.get(v_type, 0) + 1
+    
+    # Session is flagged if there are 3+ high severity or 5+ medium severity violations
+    session_flagged = severity_counts["high"] >= 3 or severity_counts["medium"] >= 5
+    
+    # Timeline of violations (last 10)
+    timeline = [
+        {
+            "type": v.get("violation_type", "unknown"),
+            "severity": v.get("severity", "low"),
+            "message": v.get("message", ""),
+            "timestamp": v.get("timestamp").isoformat() if v.get("timestamp") else "",
+        }
+        for v in violations[-10:]
+    ]
+    
+    return {
+        "total_violations": len(violations),
+        "session_flagged": session_flagged,
+        "high_severity_count": severity_counts["high"],
+        "medium_severity_count": severity_counts["medium"],
+        "low_severity_count": severity_counts["low"],
+        "violation_types": violation_types,
+        "timeline": timeline,
+    }
+
+
+def _build_behavioral_summary(sentiment_data: list[dict]) -> dict:
+    """Build a summary of behavioral and sentiment analysis."""
+    if not sentiment_data:
+        return {
+            "avg_confidence_score": 0,
+            "avg_speaking_rate": 0,
+            "avg_filler_rate": 0,
+            "dominant_emotion": "neutral",
+            "dominant_sentiment": "neutral",
+            "posture_issues": 0,
+            "gaze_issues": 0,
+            "behavioral_flags": [],
+        }
+    
+    # Calculate averages
+    confidence_scores = [s.get("confidence_score", 50) for s in sentiment_data if s.get("confidence_score")]
+    speaking_rates = [s.get("speaking_rate_wpm", 0) for s in sentiment_data if s.get("speaking_rate_wpm")]
+    filler_rates = [s.get("filler_rate", 0) for s in sentiment_data if s.get("filler_rate")]
+    
+    avg_confidence = round(sum(confidence_scores) / len(confidence_scores)) if confidence_scores else 50
+    avg_speaking_rate = round(sum(speaking_rates) / len(speaking_rates)) if speaking_rates else 0
+    avg_filler_rate = round(sum(filler_rates) / len(filler_rates), 1) if filler_rates else 0
+    
+    # Dominant emotion and sentiment
+    emotions = [s.get("emotion") for s in sentiment_data if s.get("emotion")]
+    sentiments = [s.get("sentiment") for s in sentiment_data if s.get("sentiment")]
+    
+    dominant_emotion = max(set(emotions), key=emotions.count) if emotions else "neutral"
+    dominant_sentiment = max(set(sentiments), key=sentiments.count) if sentiments else "neutral"
+    
+    # Count posture and gaze issues
+    posture_issues = sum(
+        1 for s in sentiment_data 
+        if s.get("posture") in ["slouching", "leaning_away", "face_not_visible"]
+    )
+    gaze_issues = sum(
+        1 for s in sentiment_data 
+        if s.get("gaze_direction") and s.get("gaze_direction") != "center"
+    )
+    
+    # Collect unique behavioral flags
+    all_flags = []
+    for s in sentiment_data:
+        flags = s.get("flags", [])
+        if flags:
+            all_flags.extend(flags)
+    
+    behavioral_flags = list(dict.fromkeys(all_flags))[:10]  # Top 10 unique flags
+    
+    return {
+        "avg_confidence_score": avg_confidence,
+        "avg_speaking_rate": avg_speaking_rate,
+        "avg_filler_rate": avg_filler_rate,
+        "dominant_emotion": dominant_emotion,
+        "dominant_sentiment": dominant_sentiment,
+        "posture_issues": posture_issues,
+        "gaze_issues": gaze_issues,
+        "behavioral_flags": behavioral_flags,
+        "total_data_points": len(sentiment_data),
+    }

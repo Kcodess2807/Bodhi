@@ -373,3 +373,96 @@ export const sendAudioStream = async (
     body: form,
   });
 };
+
+
+// ── Interview Reports ────────────────────────────────────
+
+export interface InterviewReport {
+  overall_grade: string;
+  overall_score_pct: number;
+  total_questions: number;
+  phase_breakdown: Record<string, {
+    score_pct: number;
+    grade: string;
+    questions_asked: number;
+    avg_composite: number;
+    metrics: {
+      accuracy: number;
+      depth: number;
+      communication: number;
+      confidence: number;
+    };
+    strengths: string[];
+    improvements: string[];
+    feedback: string[];
+  }>;
+  top_strengths: string[];
+  top_improvements: string[];
+  cross_section_insights: string[];
+  proctoring_summary: {
+    total_violations: number;
+    session_flagged: boolean;
+    high_severity_count: number;
+    medium_severity_count: number;
+    low_severity_count: number;
+    violation_types: Record<string, number>;
+    timeline: Array<{
+      type: string;
+      severity: string;
+      message: string;
+      timestamp: string;
+    }>;
+  };
+  behavioral_summary: {
+    avg_confidence_score: number;
+    avg_speaking_rate: number;
+    avg_filler_rate: number;
+    dominant_emotion: string;
+    dominant_sentiment: string;
+    posture_issues: number;
+    gaze_issues: number;
+    behavioral_flags: string[];
+    total_data_points: number;
+  };
+  hiring_recommendation: string;
+  session_info: {
+    candidate_name: string;
+    target_company: string;
+    target_role: string;
+    session_id: string;
+  };
+}
+
+export const getInterviewReport = (sessionId: string) =>
+  request<InterviewReport>(`/api/interviews/${sessionId}/report`);
+
+export const downloadReportPDF = async (sessionId: string) => {
+  const headers = new Headers();
+  if (typeof window !== "undefined") {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const token = await (window as any).Clerk?.session?.getToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+    } catch {}
+  }
+
+  const res = await fetch(`${BASE}/api/interviews/${sessionId}/report/pdf`, {
+    method: "GET",
+    headers,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${text}`);
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `interview_report_${sessionId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};

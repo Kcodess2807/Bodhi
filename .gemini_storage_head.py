@@ -1,4 +1,4 @@
-"""NeonDB PostgreSQL persistence layer (Tier 3) — permanent interview records."""
+﻿"""NeonDB PostgreSQL persistence layer (Tier 3) ΓÇö permanent interview records."""
 
 import json
 import os
@@ -24,8 +24,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ended_at        TIMESTAMPTZ,
     overall_score   REAL,
-    summary         TEXT,
-    report_data     JSONB
+    summary         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transcripts (
@@ -116,30 +115,6 @@ CREATE TABLE IF NOT EXISTS answer_scores (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS proctoring_violations (
-    id              SERIAL PRIMARY KEY,
-    session_id      TEXT NOT NULL REFERENCES sessions(id),
-    violation_type  TEXT NOT NULL,
-    severity        TEXT NOT NULL,
-    message         TEXT,
-    timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS sentiment_data (
-    id                  SERIAL PRIMARY KEY,
-    session_id          TEXT NOT NULL REFERENCES sessions(id),
-    emotion             TEXT,
-    sentiment           TEXT,
-    confidence_score    INT,
-    speaking_rate_wpm   INT,
-    filler_rate         REAL,
-    posture             TEXT,
-    gaze_direction      TEXT,
-    spine_score         INT,
-    flags               TEXT[],
-    timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE INDEX IF NOT EXISTS idx_transcripts_session ON transcripts(session_id);
 CREATE INDEX IF NOT EXISTS idx_phase_results_session ON phase_results(session_id);
 CREATE INDEX IF NOT EXISTS idx_entities_company ON entities(company_name);
@@ -147,8 +122,6 @@ CREATE INDEX IF NOT EXISTS idx_company_docs_lookup ON company_documents(company_
 CREATE INDEX IF NOT EXISTS idx_role_profiles_name ON role_profiles(role_name);
 CREATE INDEX IF NOT EXISTS idx_phase_memories_session ON phase_memories(session_id);
 CREATE INDEX IF NOT EXISTS idx_answer_scores_session ON answer_scores(session_id);
-CREATE INDEX IF NOT EXISTS idx_proctoring_violations_session ON proctoring_violations(session_id);
-CREATE INDEX IF NOT EXISTS idx_sentiment_data_session ON sentiment_data(session_id);
 """
 
 
@@ -191,17 +164,14 @@ class BodhiStorage:
         self._ensure_conn()
         with self.conn.cursor() as cur:
             cur.execute(_DDL)
-            # Safe migrations for existing databases
-            for stmt in [
-                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS clerk_user_id TEXT;",
-                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS report_data JSONB;",
-            ]:
-                try:
-                    cur.execute(stmt)
-                except Exception:
-                    pass
+            # Migration to add clerk_user_id to existing tables safely
+            try:
+                cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS clerk_user_id TEXT;")
+            except Exception:
+                pass
 
-            # user_profiles table (separate execute for clear error visibility)
+            # Execute the user_profiles table separately so any failure is visible.
+            # (psycopg2 multi-statement execute only surfaces the last statement's error.)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS user_profiles (
                     user_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -214,7 +184,7 @@ class BodhiStorage:
 
     def migrate_embedding_dimension(self) -> None:
         """One-time migration: drop and recreate company_documents for new vector(3072) dim.
-        WARNING: This drops all existing embedded document data."""
+        WARNING: This drops all existing embedded document data. Run once after upgrading embeddings."""
         self._ensure_conn()
         with self.conn.cursor() as cur:
             cur.execute("DROP TABLE IF EXISTS company_documents;")
@@ -236,7 +206,7 @@ class BodhiStorage:
     def close(self) -> None:
         self.conn.close()
 
-    # ── Sessions ──────────────────────────────────────────────────────────────
+    # ΓöÇΓöÇ Sessions ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def create_session(
         self,
@@ -259,39 +229,16 @@ class BodhiStorage:
         session_id: str,
         overall_score: float | None = None,
         summary: str = "",
-        report_data: dict | None = None,
     ) -> None:
         self._ensure_conn()
         with self.conn.cursor() as cur:
             cur.execute(
-                "UPDATE sessions SET ended_at = %s, overall_score = %s, summary = %s, report_data = %s "
+                "UPDATE sessions SET ended_at = %s, overall_score = %s, summary = %s "
                 "WHERE id = %s",
-                (
-                    datetime.now(timezone.utc),
-                    overall_score,
-                    summary,
-                    json.dumps(report_data) if report_data else None,
-                    session_id,
-                ),
+                (datetime.now(timezone.utc), overall_score, summary, session_id),
             )
 
-    def get_session_info(self, session_id: str) -> dict | None:
-        """Retrieve basic session information."""
-        self._ensure_conn()
-        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM sessions WHERE id = %s", (session_id,))
-            row = cur.fetchone()
-        return dict(row) if row else None
-
-    def get_session_report_data(self, session_id: str) -> dict | None:
-        """Retrieve the stored report data for a session."""
-        self._ensure_conn()
-        with self.conn.cursor() as cur:
-            cur.execute("SELECT report_data FROM sessions WHERE id = %s", (session_id,))
-            row = cur.fetchone()
-        return row[0] if row and row[0] else None
-
-    # ── Transcripts ───────────────────────────────────────────────────────────
+    # ΓöÇΓöÇ Transcripts ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def save_transcript_batch(
         self,
@@ -309,11 +256,12 @@ class BodhiStorage:
         with self.conn.cursor() as cur:
             psycopg2.extras.execute_values(
                 cur,
-                "INSERT INTO transcripts (session_id, role, content, phase) VALUES %s",
+                "INSERT INTO transcripts (session_id, role, content, phase) "
+                "VALUES %s",
                 rows,
             )
 
-    # ── Phase results ─────────────────────────────────────────────────────────
+    # ΓöÇΓöÇ Phase results ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def save_phase_result(
         self,
@@ -340,7 +288,7 @@ class BodhiStorage:
                 ),
             )
 
-    # ── Phase memories (compacted context) ───────────────────────────────────
+    # ΓöÇΓöÇ Phase memories (compacted context) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def save_phase_memory(
         self,
@@ -374,7 +322,7 @@ class BodhiStorage:
                 result[row["phase"]] = summary
             return result
 
-    # ── Answer scores (granular per-question scores) ──────────────────────────
+    # ΓöÇΓöÇ Answer scores (granular per-question scores) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def save_answer_score(
         self,
@@ -402,84 +350,7 @@ class BodhiStorage:
                  communication, confidence, composite, feedback, probed, probe_reason),
             )
 
-    def get_answer_scores(self, session_id: str) -> list[dict]:
-        """Retrieve all answer scores for a session."""
-        self._ensure_conn()
-        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT * FROM answer_scores WHERE session_id = %s ORDER BY phase, question_num",
-                (session_id,),
-            )
-            return [dict(r) for r in cur.fetchall()]
-
-    # ── Proctoring violations ─────────────────────────────────────────────────
-
-    def save_proctoring_violation(
-        self,
-        session_id: str,
-        violation_type: str,
-        severity: str,
-        message: str,
-    ) -> None:
-        """Store a proctoring violation."""
-        self._ensure_conn()
-        with self.conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO proctoring_violations (session_id, violation_type, severity, message) "
-                "VALUES (%s, %s, %s, %s)",
-                (session_id, violation_type, severity, message),
-            )
-
-    def get_proctoring_violations(self, session_id: str) -> list[dict]:
-        """Retrieve all proctoring violations for a session."""
-        self._ensure_conn()
-        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT * FROM proctoring_violations WHERE session_id = %s ORDER BY timestamp",
-                (session_id,),
-            )
-            return [dict(r) for r in cur.fetchall()]
-
-    # ── Sentiment data ────────────────────────────────────────────────────────
-
-    def save_sentiment_data(
-        self,
-        session_id: str,
-        emotion: str | None = None,
-        sentiment: str | None = None,
-        confidence_score: int | None = None,
-        speaking_rate_wpm: int | None = None,
-        filler_rate: float | None = None,
-        posture: str | None = None,
-        gaze_direction: str | None = None,
-        spine_score: int | None = None,
-        flags: list[str] | None = None,
-    ) -> None:
-        """Store sentiment and behavioral analysis data."""
-        self._ensure_conn()
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO sentiment_data
-                (session_id, emotion, sentiment, confidence_score, speaking_rate_wpm, filler_rate,
-                 posture, gaze_direction, spine_score, flags)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (session_id, emotion, sentiment, confidence_score, speaking_rate_wpm, filler_rate,
-                 posture, gaze_direction, spine_score, flags),
-            )
-
-    def get_sentiment_data(self, session_id: str) -> list[dict]:
-        """Retrieve all sentiment data for a session."""
-        self._ensure_conn()
-        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT * FROM sentiment_data WHERE session_id = %s ORDER BY timestamp",
-                (session_id,),
-            )
-            return [dict(r) for r in cur.fetchall()]
-
-    # ── Entities ──────────────────────────────────────────────────────────────
+    # ΓöÇΓöÇ Entities ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def get_entity(self, company_name: str) -> dict | None:
         self._ensure_conn()
@@ -520,7 +391,7 @@ class BodhiStorage:
                 ),
             )
 
-    # ── Company profiles (company+role granularity) ───────────────────────────
+    # ΓöÇΓöÇ Company profiles (company+role granularity) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def upsert_company_profile(
         self,
@@ -549,7 +420,7 @@ class BodhiStorage:
                 ),
             )
 
-    # ── Company documents (RAG vector store) ──────────────────────────────────
+    # ΓöÇΓöÇ Company documents (RAG vector store) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def insert_document_chunks(
         self,
@@ -585,7 +456,12 @@ class BodhiStorage:
         query_embedding: list[float],
         top_k: int = 5,
     ) -> list[dict]:
-        """Cosine-similarity search, merging role-only general docs + company-specific docs."""
+        """Cosine-similarity search merging role-only general docs + company-specific docs.
+
+        Fetches chunks where:
+          - company matches AND (role matches OR role='general')  -- company-specific
+          - company='general' AND role matches                    -- role-only general
+        """
         self._ensure_conn()
         emb_str = str(query_embedding)
         with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -603,7 +479,7 @@ class BodhiStorage:
             )
             return [dict(row) for row in cur.fetchall()]
 
-    # ── Role profiles ─────────────────────────────────────────────────────────
+    # ΓöÇΓöÇ Role profiles ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def create_role(
         self,
@@ -663,7 +539,7 @@ class BodhiStorage:
             )
             return cur.rowcount > 0
 
-    # ── Company profiles — list / get / delete ────────────────────────────────
+    # ΓöÇΓöÇ Company profiles ΓÇö list / get / delete ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def list_company_profiles(self) -> list[dict]:
         self._ensure_conn()
@@ -690,7 +566,7 @@ class BodhiStorage:
             )
             return cur.rowcount > 0
 
-    # ── User profiles (resume-based) ──────────────────────────────────────────
+    # ΓöÇΓöÇ User profiles (resume-based) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     def create_user_profile(self, resume_raw_text: str, professional_summary: dict) -> str:
         """Store a parsed resume profile. Returns the generated user_id (UUID string)."""
@@ -721,6 +597,7 @@ class BodhiStorage:
             if not row:
                 return None
             result = dict(row)
+            # professional_summary is already a dict when fetched from JSONB
             if isinstance(result["professional_summary"], str):
                 result["professional_summary"] = json.loads(result["professional_summary"])
             return result

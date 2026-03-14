@@ -517,9 +517,12 @@ def _flush_session_sync(
 ) -> tuple[str, float | None]:
     """Flush session data to NeonDB, trigger RAG contribution, clean up Redis.
     Returns (summary, overall_score)."""
+    from src.report import generate_report
+    
     transcript_text = ""
     summary = ""
     overall_score: float | None = None
+    report_data = None
 
     try:
         messages = []
@@ -554,8 +557,35 @@ def _flush_session_sync(
             total_q += q
 
         overall_score = total_score / total_q if total_q else None
-        summary = f"Interview complete. {total_q} questions across {len(scores)} phases."
-        storage.end_session(session_id, overall_score=overall_score, summary=summary)
+        
+        # Generate comprehensive report
+        try:
+            phase_memories = storage.get_phase_memories(session_id)
+            answer_scores = storage.get_answer_scores(session_id)
+            proctoring_violations = storage.get_proctoring_violations(session_id)
+            sentiment_data = storage.get_sentiment_data(session_id)
+            session_info = {
+                "candidate_name": state.get("candidate_name", ""),
+                "target_company": state.get("target_company", ""),
+                "target_role": state.get("target_role", ""),
+                "session_id": session_id,
+            }
+            
+            report_data = generate_report(
+                phase_memories=phase_memories,
+                answer_scores=answer_scores,
+                phase_scores=scores,
+                proctoring_violations=proctoring_violations,
+                sentiment_data=sentiment_data,
+                session_info=session_info,
+            )
+            
+            summary = report_data.get("hiring_recommendation", f"Interview complete. {total_q} questions across {len(scores)} phases.")
+        except Exception as e:
+            _log.warning(f"Failed to generate report: {e}")
+            summary = f"Interview complete. {total_q} questions across {len(scores)} phases."
+        
+        storage.end_session(session_id, overall_score=overall_score, summary=summary, report_data=report_data)
     except Exception:
         pass
 
@@ -992,36 +1022,69 @@ async def send_audio_stream(
                 "face_visible":    posture_result.get("face_visible"),
                 "posture_flags":   posture_result.get("flags", []),
             })
+        
+        # Save sentiment data to database
+        try:
+            storage.save_sentiment_data(
+                session_id=session_id,
+                emotion=sentiment_payload.get("hf_emotion") or sentiment_payload.get("emotion"),
+                sentiment=sentiment_payload.get("sentiment"),
+                confidence_score=sentiment_payload.get("confidence_score"),
+                speaking_rate_wpm=sentiment_payload.get("speaking_rate_wpm"),
+                filler_rate=sentiment_payload.get("filler_rate"),
+                posture=sentiment_payload.get("posture"),
+                gaze_direction=sentiment_payload.get("gaze_direction"),
+                spine_score=sentiment_payload.get("spine_score"),
+                flags=sentiment_payload.get("flags", []),
+            )
+        except Exception as e:
+            _stream_log.warning(f"Failed to save sentiment data: {e}")
     except Exception as e:
         _stream_log.error("Sentiment block failed: %s", e)
 
-    # ── Build streaming response ──────────────────────────────────────────────
 
-    result_holder: dict = {}
+    # ── Get LLM reply first so we can put it in headers ──────────────────────
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: graph.invoke(
+            {"messages": [HumanMessage(content=transcript)]},
+            config=graph_config,
+        ),
+    )
+
+    reply_text = ""
+    if result.get("messages") and hasattr(result["messages"][-1], "content"):
+        reply_text = _extract_text(result["messages"][-1].content).strip()
+
+    current_phase = result.get("current_phase", "streaming")
+    should_end = result.get("should_end", False)
+
+    if cache:
+        try:
+            cache.save_session_state(session_id, {
+                "phase": current_phase,
+                "difficulty": result.get("difficulty_level", 3),
+                "scores": result.get("phase_scores", {}),
+            })
+        except Exception:
+            pass
+
+    if should_end:
+        _flush_session_async(session_id, result, graph_config)
+
+    # ── Stream TTS for the reply ──────────────────────────────────────────────
 
     async def _gen():
-        async for chunk in _pipeline_audio_generator(
-            graph, graph_config, transcript, sarvam_key, result_holder
-        ):
-            yield chunk
-        if cache:
-            try:
-                st = graph.get_state(graph_config)
-                if st and st.values:
-                    cache.save_session_state(session_id, {
-                        "phase": st.values.get("current_phase", "unknown"),
-                        "difficulty": st.values.get("difficulty_level", 3),
-                        "scores": st.values.get("phase_scores", {}),
-                    })
-            except Exception:
-                pass
-        if result_holder.get("should_end"):
-            _flush_session_async(session_id, {}, graph_config)
+        if reply_text:
+            async for chunk in _tts_stream_generator(reply_text, sarvam_key):
+                yield chunk
 
     headers = _stream_headers(
         Transcript=transcript,
-        Phase="streaming",
-        End="false",
+        Text=reply_text,
+        Phase=current_phase,
+        End="true" if should_end else "false",
         Sentiment=_json.dumps(sentiment_payload),
     )
 
@@ -1030,3 +1093,295 @@ async def send_audio_stream(
         media_type="audio/mpeg",
         headers=headers,
     )
+
+
+
+
+@router.get("/{session_id}/report")
+async def get_interview_report(
+    session_id: str,
+    user_id: str = Depends(require_auth),
+    storage: BodhiStorage = Depends(get_storage),
+):
+    """Get the comprehensive interview report for a session."""
+    try:
+        report_data = storage.get_session_report_data(session_id)
+        if not report_data:
+            raise HTTPException(404, f"Report not found for session '{session_id}'")
+        
+        return report_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to retrieve report: {str(e)}")
+
+
+@router.get("/{session_id}/report/pdf")
+async def download_interview_report_pdf(
+    session_id: str,
+    user_id: str = Depends(require_auth),
+    storage: BodhiStorage = Depends(get_storage),
+):
+    """Generate and download the interview report as a PDF."""
+    from fastapi.responses import StreamingResponse
+    import io
+    
+    try:
+        report_data = storage.get_session_report_data(session_id)
+        if not report_data:
+            raise HTTPException(404, f"Report not found for session '{session_id}'")
+        
+        # Generate PDF
+        pdf_bytes = _generate_pdf_report(report_data)
+        
+        # Return as downloadable file
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename=interview_report_{session_id}.pdf"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to generate PDF: {str(e)}")
+
+
+def _generate_pdf_report(report_data: dict) -> bytes:
+    """Generate a PDF report from the report data using ReportLab."""
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    import io
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    # Custom styles
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=24,
+        textColor=colors.HexColor('#1a1a1a'),
+        spaceAfter=30,
+        alignment=TA_CENTER,
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=16,
+        textColor=colors.HexColor('#2563eb'),
+        spaceAfter=12,
+        spaceBefore=20,
+    )
+    
+    subheading_style = ParagraphStyle(
+        'CustomSubHeading',
+        parent=styles['Heading3'],
+        fontSize=13,
+        textColor=colors.HexColor('#4b5563'),
+        spaceAfter=8,
+        spaceBefore=12,
+    )
+    
+    body_style = ParagraphStyle(
+        'CustomBody',
+        parent=styles['BodyText'],
+        fontSize=10,
+        textColor=colors.HexColor('#374151'),
+        spaceAfter=6,
+    )
+    
+    # Title
+    story.append(Paragraph("Interview Performance Report", title_style))
+    story.append(Spacer(1, 0.2*inch))
+    
+    # Session Info
+    session_info = report_data.get("session_info", {})
+    if session_info:
+        info_data = [
+            ["Candidate:", session_info.get("candidate_name", "N/A")],
+            ["Company:", session_info.get("target_company", "N/A")],
+            ["Role:", session_info.get("target_role", "N/A")],
+            ["Session ID:", session_info.get("session_id", "N/A")],
+        ]
+        info_table = Table(info_data, colWidths=[1.5*inch, 4.5*inch])
+        info_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#6b7280')),
+            ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#1f2937')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        story.append(info_table)
+        story.append(Spacer(1, 0.3*inch))
+    
+    # Overall Score
+    story.append(Paragraph("Overall Performance", heading_style))
+    overall_grade = report_data.get("overall_grade", "N/A")
+    overall_score = report_data.get("overall_score_pct", 0)
+    
+    grade_color = colors.green if overall_score >= 70 else colors.orange if overall_score >= 50 else colors.red
+    
+    score_data = [
+        ["Grade", "Score", "Questions"],
+        [overall_grade, f"{overall_score}%", str(report_data.get("total_questions", 0))],
+    ]
+    score_table = Table(score_data, colWidths=[2*inch, 2*inch, 2*inch])
+    score_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f3f4f6')),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 1), (-1, 1), 14),
+        ('TEXTCOLOR', (0, 1), (0, 1), grade_color),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white]),
+        ('TOPPADDING', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+    ]))
+    story.append(score_table)
+    story.append(Spacer(1, 0.2*inch))
+    
+    # Hiring Recommendation
+    recommendation = report_data.get("hiring_recommendation", "")
+    if recommendation:
+        story.append(Paragraph(f"<b>Recommendation:</b> {recommendation}", body_style))
+        story.append(Spacer(1, 0.2*inch))
+    
+    # Phase Breakdown
+    phase_breakdown = report_data.get("phase_breakdown", {})
+    if phase_breakdown:
+        story.append(Paragraph("Phase-wise Performance", heading_style))
+        
+        phase_data = [["Phase", "Grade", "Score", "Questions"]]
+        for phase, data in phase_breakdown.items():
+            phase_data.append([
+                phase.capitalize(),
+                data.get("grade", "N/A"),
+                f"{data.get('score_pct', 0)}%",
+                str(data.get("questions_asked", 0)),
+            ])
+        
+        phase_table = Table(phase_data, colWidths=[1.5*inch, 1.5*inch, 1.5*inch, 1.5*inch])
+        phase_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f3f4f6')),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(phase_table)
+        story.append(Spacer(1, 0.2*inch))
+    
+    # Strengths and Improvements
+    strengths = report_data.get("top_strengths", [])
+    improvements = report_data.get("top_improvements", [])
+    
+    if strengths:
+        story.append(Paragraph("Key Strengths", subheading_style))
+        for strength in strengths:
+            story.append(Paragraph(f"• {strength}", body_style))
+        story.append(Spacer(1, 0.15*inch))
+    
+    if improvements:
+        story.append(Paragraph("Areas for Improvement", subheading_style))
+        for improvement in improvements:
+            story.append(Paragraph(f"• {improvement}", body_style))
+        story.append(Spacer(1, 0.2*inch))
+    
+    # Behavioral Analysis
+    behavioral = report_data.get("behavioral_summary", {})
+    if behavioral and behavioral.get("total_data_points", 0) > 0:
+        story.append(Paragraph("Behavioral Analysis", heading_style))
+        
+        behavioral_data = [
+            ["Metric", "Value"],
+            ["Avg Confidence Score", f"{behavioral.get('avg_confidence_score', 0)}/100"],
+            ["Avg Speaking Rate", f"{behavioral.get('avg_speaking_rate', 0)} wpm"],
+            ["Avg Filler Rate", f"{behavioral.get('avg_filler_rate', 0)}%"],
+            ["Dominant Emotion", behavioral.get("dominant_emotion", "N/A").capitalize()],
+            ["Dominant Sentiment", behavioral.get("dominant_sentiment", "N/A").capitalize()],
+            ["Posture Issues", str(behavioral.get("posture_issues", 0))],
+            ["Gaze Issues", str(behavioral.get("gaze_issues", 0))],
+        ]
+        
+        behavioral_table = Table(behavioral_data, colWidths=[3*inch, 3*inch])
+        behavioral_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f3f4f6')),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(behavioral_table)
+        story.append(Spacer(1, 0.2*inch))
+    
+    # Proctoring Summary
+    proctoring = report_data.get("proctoring_summary", {})
+    if proctoring and proctoring.get("total_violations", 0) > 0:
+        story.append(Paragraph("Proctoring Summary", heading_style))
+        
+        flagged_text = "Yes" if proctoring.get("session_flagged") else "No"
+        flagged_color = colors.red if proctoring.get("session_flagged") else colors.green
+        
+        proctoring_data = [
+            ["Metric", "Count"],
+            ["Total Violations", str(proctoring.get("total_violations", 0))],
+            ["High Severity", str(proctoring.get("high_severity_count", 0))],
+            ["Medium Severity", str(proctoring.get("medium_severity_count", 0))],
+            ["Low Severity", str(proctoring.get("low_severity_count", 0))],
+            ["Session Flagged", flagged_text],
+        ]
+        
+        proctoring_table = Table(proctoring_data, colWidths=[3*inch, 3*inch])
+        proctoring_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f3f4f6')),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
+            ('TEXTCOLOR', (1, 5), (1, 5), flagged_color),
+            ('FONTNAME', (1, 5), (1, 5), 'Helvetica-Bold'),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(proctoring_table)
+        story.append(Spacer(1, 0.2*inch))
+    
+    # Cross-section Insights
+    insights = report_data.get("cross_section_insights", [])
+    if insights:
+        story.append(Paragraph("Cross-section Insights", subheading_style))
+        for insight in insights:
+            story.append(Paragraph(f"• {insight}", body_style))
+    
+    # Build PDF
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    
+    return pdf_bytes

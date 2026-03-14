@@ -7,14 +7,18 @@ import {
   type StreamMeta,
   type CandidateProfile,
   type SentimentData,
+  type InterviewReport,
   startInterviewStream,
   sendAudioStream,
   parseStreamHeaders,
   getSession,
   endInterview,
   uploadResume,
+  getInterviewReport,
+  downloadReportPDF,
 } from "@/lib/api";
 import { encodeWav } from "@/lib/wav";
+import ReportPreview from "@/components/ReportPreview";
 
 type Phase =
   | "idle"       // form
@@ -53,6 +57,9 @@ export default function InterviewPage() {
   const [transcript, setTranscript] = useState<Turn[]>([]);
   const [sessionInfo, setSessionInfo] = useState<SessionState | null>(null);
   const [summary, setSummary] = useState<SessionEnd | null>(null);
+  const [report, setReport] = useState<InterviewReport | null>(null);
+  const [loadingReport, setLoadingReport] = useState(false);
+  const [downloadingPDF, setDownloadingPDF] = useState(false);
   const [level, setLevel] = useState(0);
   const [error, setError] = useState("");
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
@@ -75,6 +82,7 @@ export default function InterviewPage() {
     candidate_name: string;
     company: string;
     role: string;
+    job_title: string;
     mode: "standard" | "option_a" | "option_b";
     user_id: string;
     jd_text: string;
@@ -82,6 +90,7 @@ export default function InterviewPage() {
     candidate_name: "",
     company: "",
     role: "Software Engineer",
+    job_title: "",
     mode: "standard",
     user_id: "",
     jd_text: "",
@@ -594,10 +603,38 @@ export default function InterviewPage() {
     isRecordingRef.current = false;
     setPhase("processing");
     endProctoringSession();
-    try { const r = await endInterview(sessionIdRef.current); setSummary(r); setPhase("ended"); }
-    catch (err) { setError(String(err)); }
+    try {
+      const r = await endInterview(sessionIdRef.current);
+      setSummary(r);
+      setPhase("ended");
+      
+      // Load the report
+      setLoadingReport(true);
+      try {
+        const reportData = await getInterviewReport(sessionIdRef.current);
+        setReport(reportData);
+      } catch (err) {
+        console.error("Failed to load report:", err);
+      } finally {
+        setLoadingReport(false);
+      }
+    } catch (err) {
+      setError(String(err));
+    }
     cleanupMic();
     cleanupCamera();
+  };
+
+  const handleDownloadPDF = async () => {
+    if (!sessionIdRef.current) return;
+    setDownloadingPDF(true);
+    try {
+      await downloadReportPDF(sessionIdRef.current);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setDownloadingPDF(false);
+    }
   };
 
   // ── Resume upload ──────────────────────────────────────────────────────────
@@ -800,11 +837,23 @@ export default function InterviewPage() {
           <div ref={transcriptEndRef} />
         </div>
 
-        {summary && (
+        {summary && !report && !loadingReport && (
           <div className="mt-3 rounded-lg border border-green-700 bg-green-900/30 p-4 text-sm">
             <h3 className="mb-1 font-semibold text-green-300">Interview Complete</h3>
             <p className="text-zinc-300">{summary.summary}</p>
             {summary.overall_score != null && <p className="mt-1 text-zinc-400">Score: {summary.overall_score.toFixed(2)}</p>}
+          </div>
+        )}
+
+        {loadingReport && (
+          <div className="mt-3 rounded-lg border border-blue-700 bg-blue-900/30 p-4 text-sm text-center">
+            <p className="text-blue-300">Generating comprehensive report...</p>
+          </div>
+        )}
+
+        {report && (
+          <div className="mt-3">
+            <ReportPreview report={report} onDownloadPDF={handleDownloadPDF} downloading={downloadingPDF} />
           </div>
         )}
       </div>

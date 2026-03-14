@@ -7,7 +7,6 @@ from typing import AsyncIterator
 
 import sounddevice as sd
 import soundfile as sf
-import websockets.exceptions
 from sarvamai import SarvamAI
 
 

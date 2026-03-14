@@ -141,6 +141,21 @@ async def _handle_frame(websocket: WebSocket, message: dict, orchestrator):
         }
         for v in result.violations
     ]
+    
+    # Save violations to database
+    if result.violations:
+        try:
+            from src.api.deps import get_storage
+            storage = next(get_storage())
+            for v in result.violations:
+                storage.save_proctoring_violation(
+                    session_id=orchestrator.session_id,
+                    violation_type=v.violation_type.value,
+                    severity=v.severity.value,
+                    message=v.message,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to save proctoring violations: {e}")
 
     response = {
         "type": "frame_result",
