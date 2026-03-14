@@ -1,12 +1,11 @@
 "use client"
 
 import Link from "next/link"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Navbar from "@/components/Navbar"
-import { PageHeader } from "@/components/ui/page-header"
 import { StatusMessage } from "@/components/ui/status-message"
 import { PrimaryButton } from "@/components/ui/primary-button"
-import { uploadResume, type CandidateProfile } from "@/lib/api"
+import { uploadResume, getCurrentUserStatus, getResumeProfile, type CandidateProfile } from "@/lib/api"
 
 type UploadResult = {
   user_id: string
@@ -15,8 +14,30 @@ type UploadResult = {
 
 export default function ResumesPage() {
   const [uploading, setUploading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [result, setResult] = useState<UploadResult | null>(null)
+  const [existingProfile, setExistingProfile] = useState<CandidateProfile | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
+
+  // Load existing resume on mount
+  useEffect(() => {
+    const loadExistingResume = async () => {
+      try {
+        const status = await getCurrentUserStatus()
+        if (status.has_resume && status.user_id) {
+          setUserId(status.user_id)
+          const profile = await getResumeProfile(status.user_id)
+          setExistingProfile(profile)
+        }
+      } catch (err) {
+        console.error("Failed to load existing resume:", err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadExistingResume()
+  }, [])
 
   const handleUpload = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -36,6 +57,8 @@ export default function ResumesPage() {
     try {
       const res = await uploadResume(file)
       setResult(res)
+      setExistingProfile(res.profile)
+      setUserId(res.user_id)
       formEl.reset()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to upload resume")
@@ -45,52 +68,216 @@ export default function ResumesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F7F5F3] font-sans">
+    <div className="min-h-screen bg-[#F7F5F3] font-sans relative overflow-hidden">
+      {/* Animated Grid Background */}
+      <div className="absolute inset-0 opacity-[0.03] pointer-events-none">
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage: `
+              linear-gradient(to right, #37322F 1px, transparent 1px),
+              linear-gradient(to bottom, #37322F 1px, transparent 1px)
+            `,
+            backgroundSize: "60px 60px",
+          }}
+        />
+      </div>
+
+      {/* Gradient Orbs */}
+      <div className="absolute top-0 left-1/4 w-96 h-96 bg-[#E8E3DF] rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float" />
+      <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-[#DED9D5] rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float" style={{ animationDelay: "2s" }} />
+
       <Navbar />
 
-      <main className="pt-24 pb-12 px-4 sm:px-6 max-w-3xl mx-auto space-y-6">
-        <PageHeader
-          title="Resume Upload"
-          description="Upload your resume (PDF or DOCX) to create a profile for resume-based and JD-targeted interviews."
-        />
+      <main className="relative pt-24 pb-16 px-4 sm:px-6 max-w-4xl mx-auto space-y-8">
+        {/* Modern Header Section */}
+        <div className="text-center mb-12 animate-fade-in-up">
+          <h1 className="text-5xl sm:text-6xl font-bold text-[#2F3037] mb-4 tracking-tight">
+            Resume Management
+          </h1>
+          <p className="text-lg text-[rgba(55,50,47,0.65)] max-w-2xl mx-auto leading-relaxed">
+            Upload your resume to create a profile for resume-based and JD-targeted interviews.
+          </p>
+        </div>
 
         {error && <StatusMessage message={error} type="error" />}
 
-        {/* Upload Form */}
-        <form
-          onSubmit={handleUpload}
-          className="space-y-4 rounded-2xl border border-[rgba(55,50,47,0.10)] bg-white p-6 shadow-[0px_2px_8px_rgba(55,50,47,0.06)] animate-fade-in-up"
-          style={{ animationDelay: "0.1s" }}
-        >
-          <div>
-            <label className="mb-2 block text-sm font-semibold text-[#37322F]">
-              Resume File{" "}
-              <span className="text-[rgba(55,50,47,0.45)] font-normal">
-                (PDF or DOCX)
-              </span>
-            </label>
-            <input
-              type="file"
-              name="file"
-              accept=".pdf,.docx"
-              disabled={uploading}
-              className="w-full rounded-xl border border-[rgba(55,50,47,0.15)] bg-[#F7F5F3] px-3 py-2.5 text-sm text-[#37322F]
-                file:mr-4 file:py-1.5 file:px-4 file:rounded-full file:border-0
-                file:bg-[#37322F] file:text-white file:text-xs file:font-semibold
-                hover:file:bg-[#2a2520] disabled:opacity-50 transition"
-            />
-          </div>
+        {/* My Resume Section - Show if exists */}
+        {!loading && existingProfile && (
+          <div className="animate-fade-in-up" style={{ animationDelay: "0.1s" }}>
+            <h2 className="text-3xl font-bold text-[#2F3037] mb-6 tracking-tight">My Resume</h2>
+            <div className="space-y-5 rounded-2xl border-2 border-[rgba(55,50,47,0.08)] bg-white/70 backdrop-blur-sm p-8 shadow-[0px_8px_24px_rgba(55,50,47,0.08)]">
+              {existingProfile.name && (
+                <Field label="Name" value={existingProfile.name} />
+              )}
+              {existingProfile.email && (
+                <Field label="Email" value={existingProfile.email} />
+              )}
+              {existingProfile.summary && (
+                <Field
+                  label="Summary"
+                  value={existingProfile.summary}
+                  paragraph
+                />
+              )}
 
-          <PrimaryButton type="submit" fullWidth loading={uploading} disabled={uploading}>
-            {uploading ? "Uploading & Parsing…" : "Upload Resume"}
-          </PrimaryButton>
-        </form>
+              {existingProfile.skills.length > 0 && (
+                <div>
+                  <FieldLabel>Skills</FieldLabel>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {existingProfile.skills.map((skill, i) => (
+                      <span
+                        key={i}
+                        className="rounded-full bg-[rgba(55,50,47,0.07)] px-3 py-1 text-xs text-[#37322F] font-medium transition-all duration-200 hover:bg-[rgba(55,50,47,0.12)]"
+                      >
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {existingProfile.experience.length > 0 && (
+                <div>
+                  <FieldLabel>Experience</FieldLabel>
+                  <div className="space-y-3 mt-2">
+                    {existingProfile.experience.map((exp, i) => (
+                      <div
+                        key={i}
+                        className="rounded-xl bg-[rgba(55,50,47,0.04)] border border-[rgba(55,50,47,0.07)] p-4 transition-all duration-200 hover:border-[rgba(55,50,47,0.12)] hover:shadow-sm"
+                      >
+                        <p className="text-sm font-semibold text-[#37322F]">
+                          {exp.title}
+                        </p>
+                        <p className="text-xs text-[rgba(55,50,47,0.5)] mt-0.5">
+                          {exp.company} · {exp.duration}
+                        </p>
+                        <p className="mt-2 text-xs text-[rgba(55,50,47,0.7)] leading-5">
+                          {exp.description}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {existingProfile.education.length > 0 && (
+                <div>
+                  <FieldLabel>Education</FieldLabel>
+                  <div className="space-y-2 mt-2">
+                    {existingProfile.education.map((edu, i) => (
+                      <div key={i}>
+                        <p className="text-sm font-semibold text-[#37322F]">
+                          {edu.degree}
+                        </p>
+                        <p className="text-xs text-[rgba(55,50,47,0.5)]">
+                          {edu.institution} · {edu.year}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {existingProfile.projects && existingProfile.projects.length > 0 && (
+                <div>
+                  <FieldLabel>Projects</FieldLabel>
+                  <div className="space-y-3 mt-2">
+                    {existingProfile.projects.map((project, i) => (
+                      <div
+                        key={i}
+                        className="rounded-xl bg-[rgba(55,50,47,0.04)] border border-[rgba(55,50,47,0.07)] p-4 transition-all duration-200 hover:border-[rgba(55,50,47,0.12)] hover:shadow-sm"
+                      >
+                        <p className="text-sm font-semibold text-[#37322F]">
+                          {project.name}
+                        </p>
+                        <p className="mt-2 text-xs text-[rgba(55,50,47,0.7)] leading-5">
+                          {project.description}
+                        </p>
+                        {project.technologies.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {project.technologies.map((tech, j) => (
+                              <span
+                                key={j}
+                                className="rounded-full bg-[rgba(55,50,47,0.07)] px-2 py-0.5 text-xs text-[#37322F] font-medium"
+                              >
+                                {tech}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Interview CTAs for existing resume */}
+              {userId && (
+                <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t border-[rgba(55,50,47,0.10)]">
+                  <Link
+                    href={`/interview?mode=option_a&user_id=${userId}`}
+                    className="flex-1 rounded-xl bg-gradient-to-r from-[#37322F] to-[#2A2624] py-3.5 text-center text-sm font-semibold text-white
+                      transition-all duration-200 hover:from-[#2A2624] hover:to-[#1F1C1A] hover:shadow-[0px_6px_20px_rgba(55,50,47,0.3)]
+                      hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    Resume-Based Interview →
+                  </Link>
+                  <Link
+                    href={`/interview?mode=option_b&user_id=${userId}`}
+                    className="flex-1 rounded-xl border-2 border-[rgba(55,50,47,0.15)] bg-white py-3.5 text-center text-sm font-semibold text-[#37322F]
+                      transition-all duration-200 hover:border-[rgba(55,50,47,0.25)] hover:shadow-[0px_4px_16px_rgba(55,50,47,0.12)]
+                      hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    JD-Targeted Interview →
+                  </Link>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Upload Form Section */}
+        <div className="animate-fade-in-up" style={{ animationDelay: existingProfile ? "0.2s" : "0.1s" }}>
+          <h2 className="text-3xl font-bold text-[#2F3037] mb-6 tracking-tight">
+            {existingProfile ? "Upload New Resume" : "Upload Resume"}
+          </h2>
+          <form
+            onSubmit={handleUpload}
+            className="space-y-5 rounded-2xl border-2 border-[rgba(55,50,47,0.08)] bg-white/70 backdrop-blur-sm p-8 shadow-[0px_8px_24px_rgba(55,50,47,0.08)]"
+          >
+            <div>
+              <label className="mb-3 block text-sm font-semibold text-[#37322F]">
+                Resume File{" "}
+                <span className="text-[rgba(55,50,47,0.45)] font-normal">
+                  (PDF or DOCX)
+                </span>
+              </label>
+              <input
+                type="file"
+                name="file"
+                accept=".pdf,.docx"
+                disabled={uploading}
+                className="w-full rounded-xl border-2 border-[rgba(55,50,47,0.12)] bg-white px-4 py-3.5 text-sm text-[#37322F]
+                  file:mr-4 file:py-2 file:px-5 file:rounded-full file:border-0
+                  file:bg-gradient-to-r file:from-[#37322F] file:to-[#2A2624] file:text-white file:text-xs file:font-semibold
+                  hover:file:from-[#2A2624] hover:file:to-[#1F1C1A] hover:file:shadow-lg
+                  focus:outline-none focus:ring-4 focus:ring-[#37322F]/10 focus:border-[#37322F]
+                  disabled:opacity-50 transition-all"
+              />
+            </div>
+
+            <PrimaryButton type="submit" fullWidth loading={uploading} disabled={uploading}>
+              {uploading ? "Uploading & Parsing…" : "Upload Resume"}
+            </PrimaryButton>
+          </form>
+        </div>
 
         {/* Result */}
         {result && (
-          <div className="space-y-4 animate-fade-in-up">
+          <div className="space-y-6 animate-fade-in-up" style={{ animationDelay: "0.3s" }}>
             {/* Success header */}
-            <div className="rounded-2xl border border-[rgba(55,50,47,0.10)] bg-white p-5 shadow-[0px_2px_8px_rgba(55,50,47,0.06)]">
+            <div className="rounded-2xl border-2 border-[rgba(55,50,47,0.08)] bg-white/70 backdrop-blur-sm p-6 shadow-[0px_8px_24px_rgba(55,50,47,0.08)]">
               <div className="flex items-center gap-2 mb-3">
                 <div className="w-5 h-5 rounded-full bg-[#37322F] flex items-center justify-center shrink-0">
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
@@ -116,8 +303,8 @@ export default function ResumesPage() {
             </div>
 
             {/* Extracted profile */}
-            <div className="space-y-5 rounded-2xl border border-[rgba(55,50,47,0.10)] bg-white p-6 shadow-[0px_2px_8px_rgba(55,50,47,0.06)]">
-              <h3 className="text-lg font-semibold text-[#37322F]">
+            <div className="space-y-5 rounded-2xl border-2 border-[rgba(55,50,47,0.08)] bg-white/70 backdrop-blur-sm p-8 shadow-[0px_8px_24px_rgba(55,50,47,0.08)]">
+              <h3 className="text-xl font-bold text-[#2F3037] tracking-tight">
                 Extracted Profile
               </h3>
 
@@ -198,17 +385,17 @@ export default function ResumesPage() {
             <div className="flex flex-col sm:flex-row gap-3">
               <Link
                 href={`/interview?mode=option_a&user_id=${result.user_id}`}
-                className="flex-1 rounded-full bg-[#37322F] py-2.5 text-center text-sm font-semibold text-white
-                  transition-all duration-200 hover:bg-[#2a2520] hover:shadow-[0px_4px_12px_rgba(55,50,47,0.25)]
-                  hover:scale-[1.01] active:scale-[0.99]"
+                className="flex-1 rounded-xl bg-gradient-to-r from-[#37322F] to-[#2A2624] py-3.5 text-center text-sm font-semibold text-white
+                  transition-all duration-200 hover:from-[#2A2624] hover:to-[#1F1C1A] hover:shadow-[0px_6px_20px_rgba(55,50,47,0.3)]
+                  hover:scale-[1.02] active:scale-[0.98]"
               >
                 Resume-Based Interview →
               </Link>
               <Link
                 href={`/interview?mode=option_b&user_id=${result.user_id}`}
-                className="flex-1 rounded-full border border-[rgba(55,50,47,0.2)] bg-white py-2.5 text-center text-sm font-semibold text-[#37322F]
-                  transition-all duration-200 hover:border-[rgba(55,50,47,0.35)] hover:shadow-[0px_2px_8px_rgba(55,50,47,0.08)]
-                  hover:scale-[1.01] active:scale-[0.99]"
+                className="flex-1 rounded-xl border-2 border-[rgba(55,50,47,0.15)] bg-white py-3.5 text-center text-sm font-semibold text-[#37322F]
+                  transition-all duration-200 hover:border-[rgba(55,50,47,0.25)] hover:shadow-[0px_4px_16px_rgba(55,50,47,0.12)]
+                  hover:scale-[1.02] active:scale-[0.98]"
               >
                 JD-Targeted Interview →
               </Link>

@@ -204,22 +204,22 @@ export function InterviewSessionView({
           </div>
         </div>
 
-        {/* Center Canvas/Editor - IDE Style */}
-        <div className="flex-1 relative bg-[#1E1E1E] flex flex-col">
+        {/* Center Canvas/Editor - IDE Style (Light Mode) */}
+        <div className="flex-1 relative bg-[#FFFFFF] flex flex-col">
           {/* IDE Toolbar */}
-          <div className="h-10 bg-[#2D2D30] border-b border-[#3E3E42] flex items-center px-4 gap-2">
+          <div className="h-10 bg-[#F7F5F3] border-b border-[rgba(55,50,47,0.12)] flex items-center px-4 gap-2">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full bg-[#FF5F56]"></div>
               <div className="w-3 h-3 rounded-full bg-[#FFBD2E]"></div>
               <div className="w-3 h-3 rounded-full bg-[#27C93F]"></div>
             </div>
             <div className="flex-1 flex items-center gap-2 ml-4">
-              <div className="px-3 py-1 bg-[#1E1E1E] rounded text-xs text-[#CCCCCC] font-mono border border-[#3E3E42]">
+              <div className="px-3 py-1 bg-white rounded text-xs text-[#37322F] font-mono border border-[rgba(55,50,47,0.12)] shadow-sm">
                 interview-notes.md
               </div>
             </div>
-            <div className="flex items-center gap-2 text-[#CCCCCC]">
-              <button className="hover:bg-[#3E3E42] p-1 rounded">
+            <div className="flex items-center gap-2 text-[#37322F]">
+              <button className="hover:bg-[rgba(55,50,47,0.06)] p-1 rounded transition-colors">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
                 </svg>
@@ -230,14 +230,14 @@ export function InterviewSessionView({
           {/* IDE Editor Area */}
           <div className="flex-1 flex overflow-hidden">
             {/* Line Numbers */}
-            <div className="w-12 bg-[#1E1E1E] border-r border-[#3E3E42] py-3 text-right pr-3 font-mono text-xs text-[#858585] select-none">
+            <div className="w-12 bg-[#FAFAFA] border-r border-[rgba(55,50,47,0.10)] py-3 text-right pr-3 font-mono text-xs text-[rgba(55,50,47,0.4)] select-none">
               {Array.from({ length: 30 }, (_, i) => (
                 <div key={i} className="leading-6">{i + 1}</div>
               ))}
             </div>
 
             {/* Editor Content */}
-            <div className="flex-1 relative">
+            <div className="flex-1 relative bg-white">
               <Textarea
                 value={editorContent}
                 onChange={(e) => setEditorContent(e.target.value)}
@@ -254,9 +254,9 @@ export function InterviewSessionView({
 
 ## Follow-up Items
 - "
-                className="w-full h-full bg-transparent border-0 text-[#D4D4D4] placeholder:text-[#6A6A6A] resize-none font-mono text-sm p-3 leading-6 focus:outline-none focus:ring-0"
+                className="w-full h-full bg-transparent border-0 text-[#2F3037] placeholder:text-[rgba(55,50,47,0.35)] resize-none font-mono text-sm p-3 leading-6 focus:outline-none focus:ring-0"
                 style={{ 
-                  caretColor: '#FFFFFF',
+                  caretColor: '#37322F',
                   lineHeight: '1.5rem'
                 }}
               />
@@ -309,7 +309,7 @@ export function InterviewSessionView({
           </div>
 
           {/* IDE Status Bar */}
-          <div className="h-6 bg-[#007ACC] flex items-center px-4 text-xs text-white font-sans">
+          <div className="h-6 bg-[#37322F] flex items-center px-4 text-xs text-white font-sans">
             <div className="flex items-center gap-4">
               <span>Markdown</span>
               <span>UTF-8</span>
@@ -321,34 +321,44 @@ export function InterviewSessionView({
         {/* Right Sidebar - Participants (38% width) */}
         <div className="w-[38%] border-l border-[rgba(55,50,47,0.10)] bg-white flex flex-col">
           {/* AI Interviewer */}
-          <div className="flex-1 flex flex-col items-center justify-center p-6 border-b border-[rgba(55,50,47,0.10)] relative">
+          <div className="flex-1 flex flex-col items-center justify-center p-6 border-b border-[rgba(55,50,47,0.10)] relative bg-gradient-to-br from-[#FAFAFA] to-[#F7F5F3]">
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className={cn(
-                "relative",
-                phase === "speaking" && "ring-4 ring-[#37322F]/20 ring-offset-4 ring-offset-white rounded-full"
-              )}>
-                <Avatar className="w-28 h-28">
+              <div className="relative">
+                {/* Siri-like Animated Rings - Only when speaking */}
+                {phase === "speaking" && (
+                  <>
+                    {/* Outer ring - slow pulse */}
+                    <div className="absolute inset-0 -m-8 rounded-full border-4 border-[#37322F]/20 animate-siri-ring-1" />
+                    {/* Middle ring - medium pulse */}
+                    <div className="absolute inset-0 -m-6 rounded-full border-4 border-[#37322F]/30 animate-siri-ring-2" />
+                    {/* Inner ring - fast pulse */}
+                    <div className="absolute inset-0 -m-4 rounded-full border-4 border-[#37322F]/40 animate-siri-ring-3" />
+                  </>
+                )}
+                
+                <Avatar className="w-32 h-32 shadow-[0px_8px_32px_rgba(55,50,47,0.15)] relative z-10">
                   <AvatarFallback className={cn(
-                    "text-3xl font-semibold text-white font-sans",
+                    "text-4xl font-bold text-white font-sans",
                     interviewerPersona === "riya" 
-                      ? "bg-linear-to-br from-[#5D5754] to-[#3E3A38]" 
-                      : "bg-linear-to-br from-[#37322F] to-[#2A2624]"
+                      ? "bg-gradient-to-br from-[#5D5754] to-[#3E3A38]" 
+                      : "bg-gradient-to-br from-[#37322F] to-[#2A2624]"
                   )}>
                     {interviewerPersona === "riya" ? "R" : "B"}
                   </AvatarFallback>
                 </Avatar>
+                
                 {phase === "speaking" && (
-                  <div className="absolute -bottom-2 -right-2 bg-green-500 rounded-full p-2 shadow-lg">
-                    <Activity className="w-4 h-4 text-white animate-pulse" />
+                  <div className="absolute -bottom-2 -right-2 bg-gradient-to-br from-green-400 to-green-600 rounded-full p-2.5 shadow-lg z-20 animate-pulse">
+                    <Activity className="w-5 h-5 text-white" />
                   </div>
                 )}
               </div>
             </div>
-            <div className="absolute bottom-4 left-0 right-0 flex flex-col items-center gap-1">
-              <p className="text-sm font-semibold text-[#37322F] font-sans">
+            <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-2">
+              <p className="text-base font-bold text-[#2F3037] font-sans">
                 {interviewerPersona === "riya" ? "Riya" : "Bodhi"}
               </p>
-              <Badge className="text-xs bg-[rgba(55,50,47,0.08)] text-[#37322F] border-[rgba(55,50,47,0.12)] font-sans">
+              <Badge className="text-xs bg-[rgba(55,50,47,0.08)] text-[#37322F] border-[rgba(55,50,47,0.12)] font-sans font-medium px-3 py-1">
                 Interviewer
               </Badge>
             </div>

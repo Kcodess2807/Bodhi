@@ -106,7 +106,7 @@ export function CompanyCarousel({ companies, selectedCompany, onSelect, onDelete
               </button>
 
               {/* Icon */}
-              <div className="mb-3">
+              <div className="mb-3"> 
                 {getCompanyIcon(originalIndex)}
               </div>
 
