@@ -146,14 +146,16 @@ export default function ReportPage() {
       <div className="mx-auto max-w-5xl px-4 pt-24 pb-16 space-y-8 animate-fade-in-up">
 
         {/* ── Hero / Overall Grade ────────────────────────────────── */}
-        <section className="relative overflow-hidden rounded-2xl border border-[rgba(55,50,47,0.08)] bg-white p-8 shadow-[0px_4px_20px_rgba(55,50,47,0.06)]">
+        <section className="relative overflow-hidden rounded-2xl border border-[rgba(55,50,47,0.08)] bg-gradient-to-br from-white via-white to-[#F7F5F3] p-8 shadow-[0px_4px_20px_rgba(55,50,47,0.06)]">
+          {/* Brand accent bar */}
+          <div className="absolute top-0 left-0 right-0 h-[3px] rounded-t-2xl bg-[#37322F] opacity-75" />
           <div className="absolute -top-20 -right-20 w-64 h-64 rounded-full opacity-[0.04]"
                style={{ background: gradeColor(report.overall_grade) }} />
 
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
             {/* Left: Name + Role */}
             <div>
-              <p className="text-xs text-[rgba(55,50,47,0.5)] uppercase tracking-wider mb-1">Interview Report</p>
+              <p className="text-xs text-[rgba(55,50,47,0.5)] uppercase tracking-wider mb-1">Bodhi · Interview Report</p>
               <h1 className="text-2xl font-bold text-[#37322F]">{info.candidate_name || "Candidate"}</h1>
               <p className="text-sm text-[rgba(55,50,47,0.6)] mt-1">
                 {info.target_role}{info.target_company ? ` at ${info.target_company}` : ""}
@@ -203,15 +205,32 @@ export default function ReportPage() {
           <button
             onClick={handleDownloadPDF}
             disabled={downloadingPDF}
-            className="rounded-full bg-[#37322F] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#4a443f] disabled:opacity-50"
+            className="rounded-full bg-[#37322F] px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-[#4a443f] disabled:opacity-50 flex items-center gap-2 shadow-[0px_2px_8px_rgba(55,50,47,0.25)]"
           >
-            {downloadingPDF ? "Generating…" : "⬇ Download PDF"}
+            {downloadingPDF ? (
+              <>
+                <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin shrink-0" />
+                Generating…
+              </>
+            ) : (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Download PDF
+              </>
+            )}
           </button>
         </div>
 
         {/* ── Phase Breakdown ────────────────────────────────────── */}
         <section className="space-y-4">
-          <h2 className="text-lg font-bold text-[#37322F]">Phase Breakdown</h2>
+          <h2 className="text-lg font-bold text-[#37322F] flex items-center gap-2.5">
+            <span className="w-1 h-5 rounded-full bg-[#37322F] opacity-60 shrink-0" />
+            Phase Breakdown
+          </h2>
           <div className="grid gap-4 md:grid-cols-2">
             {phases.map(([phase, data]) => (
               <div
@@ -289,7 +308,10 @@ export default function ReportPage() {
 
         {/* ── Behavioral Analytics ───────────────────────────────── */}
         <section className="space-y-4">
-          <h2 className="text-lg font-bold text-[#37322F]">Behavioral Analytics</h2>
+          <h2 className="text-lg font-bold text-[#37322F] flex items-center gap-2.5">
+            <span className="w-1 h-5 rounded-full bg-[#37322F] opacity-60 shrink-0" />
+            Behavioral Analytics
+          </h2>
           <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
             <StatCard
               label="Confidence Score"
@@ -354,7 +376,10 @@ export default function ReportPage() {
 
         {/* ── Proctoring Summary ─────────────────────────────────── */}
         <section className="space-y-4">
-          <h2 className="text-lg font-bold text-[#37322F]">Proctoring Summary</h2>
+          <h2 className="text-lg font-bold text-[#37322F] flex items-center gap-2.5">
+            <span className="w-1 h-5 rounded-full bg-[#37322F] opacity-60 shrink-0" />
+            Proctoring Summary
+          </h2>
           <div className="rounded-2xl border border-[rgba(55,50,47,0.08)] bg-white p-5 shadow-[0px_2px_8px_rgba(55,50,47,0.04)]">
             {proctor.session_flagged && (
               <div className="mb-4 rounded-xl bg-red-50 border border-red-200 p-3 flex items-center gap-2">
@@ -410,11 +435,14 @@ export default function ReportPage() {
         {/* ── Cross-Section Insights ─────────────────────────────── */}
         {report.cross_section_insights.length > 0 && (
           <section className="space-y-4">
-            <h2 className="text-lg font-bold text-[#37322F]">Cross-Section Insights</h2>
+            <h2 className="text-lg font-bold text-[#37322F] flex items-center gap-2.5">
+              <span className="w-1 h-5 rounded-full bg-[#37322F] opacity-60 shrink-0" />
+              Cross-Section Insights
+            </h2>
             <div className="rounded-2xl border border-[rgba(55,50,47,0.08)] bg-white p-5 shadow-[0px_2px_8px_rgba(55,50,47,0.04)] space-y-2">
               {report.cross_section_insights.map((insight, i) => (
                 <div key={i} className="flex items-start gap-2 text-sm text-[#37322F]">
-                  <span className="text-blue-500 mt-0.5 shrink-0">●</span>
+                  <span className="mt-0.5 shrink-0 text-[#37322F] opacity-40">▸</span>
                   <p>{insight}</p>
                 </div>
               ))}
@@ -426,7 +454,10 @@ export default function ReportPage() {
         <div className="grid gap-4 md:grid-cols-2">
           {report.top_strengths.length > 0 && (
             <section className="rounded-2xl border border-[rgba(55,50,47,0.08)] bg-white p-5 shadow-[0px_2px_8px_rgba(55,50,47,0.04)]">
-              <h3 className="text-sm font-bold text-[#37322F] mb-3">Top Strengths</h3>
+              <h3 className="text-sm font-bold text-[#37322F] mb-3 flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-[#37322F] opacity-50 shrink-0" />
+                Top Strengths
+              </h3>
               <ul className="space-y-2">
                 {report.top_strengths.map((s, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-[#37322F]">
@@ -439,7 +470,10 @@ export default function ReportPage() {
 
           {report.top_improvements.length > 0 && (
             <section className="rounded-2xl border border-[rgba(55,50,47,0.08)] bg-white p-5 shadow-[0px_2px_8px_rgba(55,50,47,0.04)]">
-              <h3 className="text-sm font-bold text-[#37322F] mb-3">Areas for Improvement</h3>
+              <h3 className="text-sm font-bold text-[#37322F] mb-3 flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-[#37322F] opacity-50 shrink-0" />
+                Areas for Improvement
+              </h3>
               <ul className="space-y-2">
                 {report.top_improvements.map((s, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-[#37322F]">
@@ -450,6 +484,15 @@ export default function ReportPage() {
             </section>
           )}
         </div>
+
+        {/* ── Brand Footer ─────────────────────────────────────── */}
+        <footer className="text-center pt-4 pb-2 border-t border-[rgba(55,50,47,0.06)]">
+          <p className="text-xs text-[rgba(55,50,47,0.3)]">
+            Generated by{" "}
+            <span className="font-semibold text-[rgba(55,50,47,0.45)]">Bodhi</span>
+            {" "}· AI Mock Interview Platform
+          </p>
+        </footer>
 
       </div>
     </div>

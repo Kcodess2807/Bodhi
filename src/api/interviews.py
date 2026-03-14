@@ -1208,42 +1208,71 @@ def _generate_pdf_report(report_data: dict) -> bytes:
     story = []
     styles = getSampleStyleSheet()
     
+    # Brand colors
+    BRAND_PRIMARY = colors.HexColor('#37322F')
+    BRAND_BG = colors.HexColor('#F7F5F3')
+    BRAND_WARM_MID = colors.HexColor('#6B5E58')
+    BRAND_TABLE_HEADER = colors.HexColor('#EDE9E4')
+    BRAND_ALT_ROW = colors.HexColor('#F7F5F3')
+    BRAND_GRID = colors.HexColor('#D9D3CC')
+
     # Custom styles
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
         fontSize=24,
-        textColor=colors.HexColor('#1a1a1a'),
+        textColor=BRAND_PRIMARY,
         spaceAfter=30,
         alignment=TA_CENTER,
     )
-    
+
     heading_style = ParagraphStyle(
         'CustomHeading',
         parent=styles['Heading2'],
         fontSize=16,
-        textColor=colors.HexColor('#2563eb'),
+        textColor=BRAND_PRIMARY,
         spaceAfter=12,
         spaceBefore=20,
     )
-    
+
     subheading_style = ParagraphStyle(
         'CustomSubHeading',
         parent=styles['Heading3'],
         fontSize=13,
-        textColor=colors.HexColor('#4b5563'),
+        textColor=BRAND_WARM_MID,
         spaceAfter=8,
         spaceBefore=12,
     )
-    
+
     body_style = ParagraphStyle(
         'CustomBody',
         parent=styles['BodyText'],
         fontSize=10,
-        textColor=colors.HexColor('#374151'),
+        textColor=BRAND_PRIMARY,
         spaceAfter=6,
     )
-    
+
+    # Brand header strip
+    brand_data = [["BODHI", "AI Mock Interview Platform"]]
+    brand_table = Table(brand_data, colWidths=[2*inch, 4.5*inch])
+    brand_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), BRAND_PRIMARY),
+        ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
+        ('FONTNAME', (1, 0), (1, 0), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (0, 0), 14),
+        ('FONTSIZE', (1, 0), (1, 0), 10),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
+        ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+        ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+        ('LEFTPADDING', (0, 0), (0, 0), 14),
+        ('RIGHTPADDING', (1, 0), (1, 0), 14),
+    ]))
+    story.append(brand_table)
+    story.append(Spacer(1, 0.2*inch))
+
     # Title
     story.append(Paragraph("Interview Performance Report", title_style))
     story.append(Spacer(1, 0.2*inch))
@@ -1262,8 +1291,8 @@ def _generate_pdf_report(report_data: dict) -> bytes:
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#6b7280')),
-            ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#1f2937')),
+            ('TEXTCOLOR', (0, 0), (0, -1), BRAND_WARM_MID),
+            ('TEXTCOLOR', (1, 0), (1, -1), BRAND_PRIMARY),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ]))
@@ -1283,15 +1312,16 @@ def _generate_pdf_report(report_data: dict) -> bytes:
     ]
     score_table = Table(score_data, colWidths=[2*inch, 2*inch, 2*inch])
     score_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f3f4f6')),
+        ('BACKGROUND', (0, 0), (-1, 0), BRAND_TABLE_HEADER),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('TEXTCOLOR', (0, 0), (-1, 0), BRAND_PRIMARY),
         ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 1), (-1, 1), 14),
         ('TEXTCOLOR', (0, 1), (0, 1), grade_color),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
+        ('GRID', (0, 0), (-1, -1), 1, BRAND_GRID),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white]),
         ('TOPPADDING', (0, 0), (-1, -1), 10),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
@@ -1321,13 +1351,14 @@ def _generate_pdf_report(report_data: dict) -> bytes:
         
         phase_table = Table(phase_data, colWidths=[1.5*inch, 1.5*inch, 1.5*inch, 1.5*inch])
         phase_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f3f4f6')),
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_TABLE_HEADER),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('TEXTCOLOR', (0, 0), (-1, 0), BRAND_PRIMARY),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
+            ('GRID', (0, 0), (-1, -1), 1, BRAND_GRID),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, BRAND_ALT_ROW]),
             ('TOPPADDING', (0, 0), (-1, -1), 8),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
         ]))
@@ -1368,14 +1399,15 @@ def _generate_pdf_report(report_data: dict) -> bytes:
         
         behavioral_table = Table(behavioral_data, colWidths=[3*inch, 3*inch])
         behavioral_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f3f4f6')),
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_TABLE_HEADER),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('TEXTCOLOR', (0, 0), (-1, 0), BRAND_PRIMARY),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('ALIGN', (0, 0), (0, -1), 'LEFT'),
             ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
+            ('GRID', (0, 0), (-1, -1), 1, BRAND_GRID),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, BRAND_ALT_ROW]),
             ('TOPPADDING', (0, 0), (-1, -1), 8),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
         ]))
@@ -1401,14 +1433,15 @@ def _generate_pdf_report(report_data: dict) -> bytes:
         
         proctoring_table = Table(proctoring_data, colWidths=[3*inch, 3*inch])
         proctoring_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f3f4f6')),
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_TABLE_HEADER),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('TEXTCOLOR', (0, 0), (-1, 0), BRAND_PRIMARY),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('ALIGN', (0, 0), (0, -1), 'LEFT'),
             ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
+            ('GRID', (0, 0), (-1, -1), 1, BRAND_GRID),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, BRAND_ALT_ROW]),
             ('TEXTCOLOR', (1, 5), (1, 5), flagged_color),
             ('FONTNAME', (1, 5), (1, 5), 'Helvetica-Bold'),
             ('TOPPADDING', (0, 0), (-1, -1), 8),

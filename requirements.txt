@@ -38,11 +38,13 @@ mediapipe>=0.10.0
 
 # Clerk JWT verification
 pyjwt[crypto]>=2.8.0
-deepface>=0.0.79
+# deepface and tf-keras require TensorFlow, which is not available for Python 3.14+.
+# These are only installed on Python versions that are supported by TensorFlow.
+deepface>=0.0.79; python_version < "3.14"
 pydantic-settings>=2.0.0
 loguru>=0.7.0
 ultralytics>=8.0.0
-tf-keras>=2.16.0
+tf-keras>=2.16.0; python_version < "3.14"
 
 # PDF generation
 reportlab>=4.0.0
