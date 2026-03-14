@@ -566,13 +566,16 @@ def _flush_session_sync(
 
 # ── Streaming endpoints ───────────────────────────────────────────
 
+import re
+import asyncio
+import logging
+
+_stream_log = logging.getLogger("bodhi.api.stream")
+
 
 async def _tts_stream_generator(text: str, sarvam_key: str):
-    """Yield MP3 audio chunks from TTS streaming."""
-    import logging
-    log = logging.getLogger("bodhi.api.stream")
-
-    log.info("Starting TTS stream for %d chars of text", len(text))
+    """Yield MP3 audio chunks from TTS streaming (legacy full-text mode)."""
+    _stream_log.info("Starting TTS stream for %d chars of text", len(text))
     from src.services.tts import text_to_speech_stream
     chunk_count = 0
     try:
@@ -580,12 +583,137 @@ async def _tts_stream_generator(text: str, sarvam_key: str):
             text, api_key=sarvam_key, target_language_code="hi-IN", speaker="shubh",
         ):
             chunk_count += 1
-            log.debug("Yielding chunk #%d (%d bytes)", chunk_count, len(chunk))
+            _stream_log.debug("Yielding chunk #%d (%d bytes)", chunk_count, len(chunk))
             yield chunk
     except Exception as exc:
-        log.error("TTS stream generator error: %s: %s", type(exc).__name__, exc, exc_info=True)
+        _stream_log.error("TTS stream generator error: %s: %s", type(exc).__name__, exc, exc_info=True)
         raise
-    log.info("TTS stream generator done: %d chunks yielded", chunk_count)
+    _stream_log.info("TTS stream generator done: %d chunks yielded", chunk_count)
+
+
+_SENTENCE_END = re.compile(r'(?<=[.!?])\s')
+
+
+async def _sentence_accumulator(token_aiter):
+    """Consume an async iterator of LLM tokens and yield complete sentences.
+
+    Splits on sentence boundaries (.!?) so TTS gets coherent phrases.
+    Flushes any remaining buffer at the end.
+    """
+    buf = ""
+    async for token in token_aiter:
+        buf += token
+        # Check for sentence boundaries
+        parts = _SENTENCE_END.split(buf)
+        if len(parts) > 1:
+            # All but last part are complete sentences
+            for sentence in parts[:-1]:
+                sentence = sentence.strip()
+                if sentence:
+                    _stream_log.info("[ACCUMULATOR] Yielding sentence: %s", sentence[:80])
+                    yield sentence
+            buf = parts[-1]
+    # Flush remainder
+    buf = buf.strip()
+    if buf:
+        _stream_log.info("[ACCUMULATOR] Yielding final fragment: %s", buf[:80])
+        yield buf
+
+
+async def _llm_tts_pipeline(graph, graph_config, user_input, sarvam_key: str):
+    """Pipeline: LLM tokens → sentence accumulator → TTS audio chunks.
+
+    Uses graph.astream_events() to get individual LLM tokens, accumulates
+    them into sentences, and feeds sentences to TTS concurrently.
+
+    Yields:
+        (audio_chunk: bytes | None, meta: dict | None)
+        - audio chunks as they arrive
+        - a final meta dict with {reply_text, phase, should_end} after all audio
+
+    The meta dict is yielded LAST with audio_chunk=None so the caller can
+    extract state info for cache/headers.
+    """
+    from src.services.tts import tts_stream_sentences
+
+    collected_text = []
+    phase = "unknown"
+    should_end = False
+
+    # Async generator that extracts LLM tokens from astream_events
+    async def _llm_tokens():
+        nonlocal phase, should_end
+        try:
+            async for event in graph.astream_events(
+                {"messages": [HumanMessage(content=user_input)]},
+                config=graph_config,
+                version="v2",
+            ):
+                kind = event.get("event", "")
+
+                if kind == "on_chat_model_stream":
+                    chunk = event.get("data", {}).get("chunk")
+                    if chunk and hasattr(chunk, "content"):
+                        token_text = _extract_text(chunk.content)
+                        if token_text:
+                            collected_text.append(token_text)
+                            yield token_text
+
+                elif kind == "on_tool_end":
+                    output = event.get("data", {}).get("output", "")
+                    if hasattr(output, "content"):
+                        output = output.content
+                    output = str(output)
+                    if output.startswith("TRANSITION:"):
+                        phase = output.split(":", 1)[1]
+                        _stream_log.info("[PIPELINE] Phase transition → %s", phase)
+                    elif output.startswith("END:"):
+                        should_end = True
+                        _stream_log.info("[PIPELINE] Interview end triggered")
+
+        except Exception as e:
+            _stream_log.error("[PIPELINE] astream_events error: %s", e, exc_info=True)
+
+    # Pipeline: LLM tokens → sentences → TTS audio
+    sentence_stream = _sentence_accumulator(_llm_tokens())
+
+    chunk_count = 0
+    try:
+        async for audio_chunk in tts_stream_sentences(
+            sentence_stream,
+            api_key=sarvam_key,
+            target_language_code="hi-IN",
+            speaker="shubh",
+        ):
+            chunk_count += 1
+            yield audio_chunk, None
+    except Exception as exc:
+        _stream_log.error("[PIPELINE] TTS pipeline error: %s", exc, exc_info=True)
+
+    # After all audio, get the current state for headers/cache
+    try:
+        state = graph.get_state(graph_config)
+        if state and state.values:
+            phase = state.values.get("current_phase", phase)
+            should_end = state.values.get("should_end", should_end)
+    except Exception:
+        pass
+
+    reply_text = "".join(collected_text).strip()
+    _stream_log.info("[PIPELINE] Done: %d audio chunks, %d chars reply, phase=%s, end=%s",
+                     chunk_count, len(reply_text), phase, should_end)
+
+    yield None, {"reply_text": reply_text, "phase": phase, "should_end": should_end}
+
+
+async def _pipeline_audio_generator(graph, graph_config, user_input, sarvam_key, result_holder: dict):
+    """Async generator that yields only audio bytes from the pipeline.
+    Stores the final metadata in result_holder for the caller to inspect."""
+    async for audio_chunk, meta in _llm_tts_pipeline(graph, graph_config, user_input, sarvam_key):
+        if audio_chunk is not None:
+            yield audio_chunk
+        elif meta is not None:
+            result_holder.update(meta)
 
 
 def _stream_headers(**kwargs: str) -> dict[str, str]:
@@ -609,22 +737,36 @@ async def start_interview_stream(
 ):
     """Start interview and stream greeting audio as MP3.
     Metadata is returned in response headers."""
+    import json
+    loop = asyncio.get_event_loop()
     session_id = uuid.uuid4().hex[:12]
 
-    candidate_profile, jd_context, gap_map = _load_candidate_context(
-        body.mode, body.user_id, body.jd_text, storage, llm
+    _stream_log.info("[START-STREAM] Session %s: loading context...", session_id)
+
+    # Run all blocking I/O in thread pool to avoid blocking event loop
+    candidate_profile, jd_context, gap_map = await loop.run_in_executor(
+        None, lambda: _load_candidate_context(body.mode, body.user_id, body.jd_text, storage, llm)
     )
-    entity_context = _load_entity_context(body.company, body.role, cache, storage)
-    suggested_topics = _load_suggested_topics(body.company, body.role, cache)
+    entity_context = await loop.run_in_executor(
+        None, lambda: _load_entity_context(body.company, body.role, cache, storage)
+    )
+    suggested_topics = await loop.run_in_executor(
+        None, lambda: _load_suggested_topics(body.company, body.role, cache)
+    )
 
     # Pre-generate curriculum (2 technical + 2 DSA questions)
-    curriculum = generate_interview_curriculum(body.company, body.role, storage, jd_text=body.jd_text)
+    _stream_log.info("[START-STREAM] Session %s: generating curriculum...", session_id)
+    curriculum = await loop.run_in_executor(
+        None, lambda: generate_interview_curriculum(body.company, body.role, storage, jd_text=body.jd_text)
+    )
     if cache:
         for phase, questions in curriculum.items():
             cache.set_question_queue(session_id, phase, questions)
 
     try:
-        storage.create_session(session_id, body.candidate_name, body.company, body.role)
+        await loop.run_in_executor(
+            None, lambda: storage.create_session(session_id, body.candidate_name, body.company, body.role)
+        )
     except Exception:
         pass
 
@@ -649,18 +791,21 @@ async def start_interview_stream(
         "gap_map": gap_map,
     }
 
-    result = graph.invoke(initial_state, config=graph_config)
+    _stream_log.info("[START-STREAM] Session %s: invoking graph for greeting...", session_id)
+    result = await loop.run_in_executor(
+        None, lambda: graph.invoke(initial_state, config=graph_config)
+    )
     greeting = _extract_text(
         result["messages"][-1].content
         if result["messages"] and hasattr(result["messages"][-1], "content")
         else ""
     )
+    _stream_log.info("[START-STREAM] Session %s: greeting ready (%d chars)", session_id, len(greeting))
 
     if not sarvam_key or not greeting:
         raise HTTPException(500, "TTS not available")
 
     # Serialize curriculum for frontend debugging
-    import json
     curriculum_json = json.dumps(curriculum) if curriculum else "{}"
 
     headers = _stream_headers(
@@ -686,7 +831,7 @@ async def send_message_stream(
     cache: BodhiCache | None = Depends(get_cache),
     sarvam_key: str = Depends(get_sarvam_key),
 ):
-    """Send text message and stream reply audio as MP3."""
+    """Send text message and stream reply audio as MP3 (low-latency pipeline)."""
     graph_config = {"configurable": {"thread_id": session_id}}
 
     try:
@@ -698,43 +843,39 @@ async def send_message_stream(
     except Exception:
         raise HTTPException(404, f"Session '{session_id}' not found")
 
-    result = graph.invoke(
-        {"messages": [HumanMessage(content=body.text)]},
-        config=graph_config,
-    )
+    if not sarvam_key:
+        raise HTTPException(500, "SARVAM_API_KEY not configured")
 
-    reply = ""
-    if result["messages"] and hasattr(result["messages"][-1], "content"):
-        reply = _extract_text(result["messages"][-1].content).strip()
+    result_holder: dict = {}
 
-    phase = result.get("current_phase", "unknown")
-    should_end = result.get("should_end", False)
-
-    if cache:
-        try:
-            cache.save_session_state(session_id, {
-                "phase": phase,
-                "difficulty": result.get("difficulty_level", 3),
-                "scores": result.get("phase_scores", {}),
-            })
-        except Exception:
-            pass
-
-    if should_end:
-        _flush_session_async(session_id, result, graph_config)
-
-    if not sarvam_key or not reply:
-        raise HTTPException(500, "TTS not available or empty reply")
+    async def _gen():
+        async for chunk in _pipeline_audio_generator(
+            graph, graph_config, body.text, sarvam_key, result_holder
+        ):
+            yield chunk
+        # Post-stream: cache update
+        if cache:
+            try:
+                st = graph.get_state(graph_config)
+                if st and st.values:
+                    cache.save_session_state(session_id, {
+                        "phase": st.values.get("current_phase", "unknown"),
+                        "difficulty": st.values.get("difficulty_level", 3),
+                        "scores": st.values.get("phase_scores", {}),
+                    })
+            except Exception:
+                pass
+        if result_holder.get("should_end"):
+            _flush_session_async(session_id, {}, graph_config)
 
     headers = _stream_headers(
-        Text=reply,
         Transcript=body.text,
-        Phase=phase,
-        End=str(should_end).lower(),
+        Phase="streaming",
+        End="false",
     )
 
     return StreamingResponse(
-        _tts_stream_generator(reply, sarvam_key),
+        _gen(),
         media_type="audio/mpeg",
         headers=headers,
     )
@@ -749,7 +890,7 @@ async def send_audio_stream(
     cache: BodhiCache | None = Depends(get_cache),
     sarvam_key: str = Depends(get_sarvam_key),
 ):
-    """Upload WAV audio and stream reply audio as MP3."""
+    """Upload WAV audio and stream reply audio as MP3 (low-latency pipeline)."""
     graph_config = {"configurable": {"thread_id": session_id}}
 
     try:
@@ -777,43 +918,36 @@ async def send_audio_stream(
     if not transcript:
         raise HTTPException(422, "Could not transcribe audio")
 
-    result = graph.invoke(
-        {"messages": [HumanMessage(content=transcript)]},
-        config=graph_config,
-    )
+    result_holder: dict = {}
 
-    reply = ""
-    if result["messages"] and hasattr(result["messages"][-1], "content"):
-        reply = _extract_text(result["messages"][-1].content).strip()
-
-    phase = result.get("current_phase", "unknown")
-    should_end = result.get("should_end", False)
-
-    if cache:
-        try:
-            cache.save_session_state(session_id, {
-                "phase": phase,
-                "difficulty": result.get("difficulty_level", 3),
-                "scores": result.get("phase_scores", {}),
-            })
-        except Exception:
-            pass
-
-    if should_end:
-        _flush_session_async(session_id, result, graph_config)
-
-    if not reply:
-        raise HTTPException(500, "Empty reply from interviewer")
+    async def _gen():
+        async for chunk in _pipeline_audio_generator(
+            graph, graph_config, transcript, sarvam_key, result_holder
+        ):
+            yield chunk
+        # Post-stream: cache update
+        if cache:
+            try:
+                st = graph.get_state(graph_config)
+                if st and st.values:
+                    cache.save_session_state(session_id, {
+                        "phase": st.values.get("current_phase", "unknown"),
+                        "difficulty": st.values.get("difficulty_level", 3),
+                        "scores": st.values.get("phase_scores", {}),
+                    })
+            except Exception:
+                pass
+        if result_holder.get("should_end"):
+            _flush_session_async(session_id, {}, graph_config)
 
     headers = _stream_headers(
-        Text=reply,
         Transcript=transcript,
-        Phase=phase,
-        End=str(should_end).lower(),
+        Phase="streaming",
+        End="false",
     )
 
     return StreamingResponse(
-        _tts_stream_generator(reply, sarvam_key),
+        _gen(),
         media_type="audio/mpeg",
         headers=headers,
     )

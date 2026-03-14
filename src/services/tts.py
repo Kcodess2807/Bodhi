@@ -204,3 +204,103 @@ async def text_to_speech_stream(
                 raise
             await asyncio.sleep(1.0)
 
+
+async def tts_stream_sentences(
+    sentences: "AsyncIterator[str]",
+    *,
+    api_key: str,
+    model: str = "bulbul:v3",
+    target_language_code: str = "hi-IN",
+    speaker: str = "shubh",
+) -> AsyncIterator[bytes]:
+    """Stream TTS audio as sentences arrive from the LLM — pipelined.
+
+    Unlike text_to_speech_stream (which needs the full text upfront), this
+    function consumes an async iterator of sentence strings and converts them
+    to audio concurrently:
+
+    1. A producer task reads sentences and sends them via ws.convert()
+    2. The main coroutine reads audio chunks from the WS and yields them
+
+    This means TTS audio generation starts as soon as the FIRST sentence
+    is ready, even while the LLM is still generating subsequent sentences.
+    """
+    import logging
+    import asyncio
+    log = logging.getLogger("bodhi.tts.pipeline")
+
+    from sarvamai import AsyncSarvamAI
+    from sarvamai.types.audio_output import AudioOutput
+    from sarvamai.types.event_response import EventResponse
+    from sarvamai.types.error_response import ErrorResponse
+
+    client = AsyncSarvamAI(api_subscription_key=api_key)
+
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with client.text_to_speech_streaming.connect(
+                model=model,
+                api_subscription_key=api_key,
+                send_completion_event=True,
+            ) as ws:
+                log.info("[TTS-PIPE] WebSocket connected (attempt %d), configuring...", attempt)
+
+                await ws.configure(
+                    target_language_code=target_language_code,
+                    speaker=speaker,
+                    output_audio_codec="mp3",
+                    speech_sample_rate=24000,
+                    enable_preprocessing=True,
+                )
+
+                # Producer: feed sentences to TTS as they arrive from LLM
+                async def _send_sentences():
+                    sent_count = 0
+                    try:
+                        async for sentence in sentences:
+                            sentence = sentence.strip()
+                            if not sentence:
+                                continue
+                            await ws.convert(sentence)
+                            sent_count += 1
+                            log.info("[TTS-PIPE] Sent sentence #%d (%d chars): %s",
+                                     sent_count, len(sentence), sentence[:60])
+                    except Exception as e:
+                        log.error("[TTS-PIPE] Sentence producer error: %s", e)
+                    finally:
+                        await ws.flush()
+                        log.info("[TTS-PIPE] All %d sentences sent + flushed", sent_count)
+
+                # Start producer as a background task
+                producer = asyncio.create_task(_send_sentences())
+
+                # Consumer: yield audio chunks as they arrive
+                chunk_count = 0
+                total_bytes = 0
+                async for message in ws:
+                    if isinstance(message, AudioOutput):
+                        audio_bytes = base64.b64decode(message.data.audio)
+                        chunk_count += 1
+                        total_bytes += len(audio_bytes)
+                        log.debug("[TTS-PIPE] Audio chunk #%d: %d bytes", chunk_count, len(audio_bytes))
+                        yield audio_bytes
+                    elif isinstance(message, EventResponse):
+                        log.info("[TTS-PIPE] Completion event received")
+                        break
+                    elif isinstance(message, ErrorResponse):
+                        log.error("[TTS-PIPE] TTS error: %s", message)
+                        break
+
+                # Ensure producer is done
+                await producer
+                log.info("[TTS-PIPE] Done: %d chunks, %d bytes total", chunk_count, total_bytes)
+                break  # Success
+
+        except Exception as exc:
+            log.warning("[TTS-PIPE] Attempt %d failed: %s: %s", attempt, type(exc).__name__, exc)
+            if attempt == max_retries:
+                log.error("[TTS-PIPE] All %d attempts failed", max_retries, exc_info=True)
+                raise
+            await asyncio.sleep(1.0)
+

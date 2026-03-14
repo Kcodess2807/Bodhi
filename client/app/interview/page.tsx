@@ -131,10 +131,14 @@ export default function InterviewPage() {
     []
   );
 
-  /** Play a streaming audio/mpeg response progressively using MediaSource. */
+  /**
+   * Play a streaming audio/mpeg response progressively using chunk batching.
+   * Accumulates ~15 chunks into a batch, creates a Blob URL, and plays it.
+   * Subsequent batches are queued and played sequentially via onended chaining.
+   */
   const playStreamingAudio = useCallback(
     (response: Response): Promise<void> => {
-      return new Promise((resolve) => {
+      return new Promise(async (resolve) => {
         const reader = response.body?.getReader();
         if (!reader) {
           console.warn("[Bodhi] No response body reader available");
@@ -142,107 +146,118 @@ export default function InterviewPage() {
           return;
         }
 
-        const mediaSource = new MediaSource();
-        const url = URL.createObjectURL(mediaSource);
-        const audio = new Audio(url);
+        console.time("[Bodhi] time-to-first-audio");
+        let firstBatchPlayed = false;
 
-        let cleanupDone = false;
-        const cleanup = () => {
-          if (cleanupDone) return;
-          cleanupDone = true;
-          console.log("[Bodhi] Audio playback ended/cleaned up");
-          URL.revokeObjectURL(url);
-          resolve();
-        };
+        const BATCH_SIZE = 25; // chunks per batch (~20KB)
+        const audioQueue: HTMLAudioElement[] = [];
+        let currentAudio: HTMLAudioElement | null = null;
+        let streamDone = false;
+        let resolved = false;
 
-        audio.onended = cleanup;
-        audio.onerror = (e) => {
-          console.error("[Bodhi] Audio playback error:", e);
-          cleanup();
-        };
-
-        mediaSource.addEventListener("sourceopen", async () => {
-          console.log("[Bodhi] MediaSource opened, creating SourceBuffer (audio/mpeg)");
-          // Sarvam bulbul model generates MP3 audio
-          const mimeCodec = 'audio/mpeg';
-
-          if (!MediaSource.isTypeSupported(mimeCodec)) {
-            console.error("[Bodhi] Browser does NOT support", mimeCodec);
-            // Fallback: wait for all chunks and play as Blob
-            const allChunks: Uint8Array[] = [];
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              if (value) allChunks.push(value as Uint8Array);
+        const playNext = () => {
+          if (resolved) return;
+          if (audioQueue.length === 0) {
+            if (streamDone) {
+              console.log("[Bodhi] All audio batches played");
+              resolved = true;
+              resolve();
             }
-            const blob = new Blob(allChunks as BlobPart[], { type: "audio/mpeg" });
-            const fallbackUrl = URL.createObjectURL(blob);
-            audio.src = fallbackUrl;
-            audio.play().catch((err) => {
-              console.error("[Bodhi] Fallback audio play() rejected:", err);
-              cleanup();
-            });
             return;
           }
 
-          const sourceBuffer = mediaSource.addSourceBuffer(mimeCodec);
-          const queue: Uint8Array[] = [];
-          let isAppending = false;
-          let isStreamDone = false;
-
-          const appendNext = () => {
-            if (isAppending || sourceBuffer.updating) return;
-
-            if (queue.length > 0) {
-              isAppending = true;
-              const chunk = queue.shift()!;
-              try {
-                sourceBuffer.appendBuffer(chunk as unknown as BufferSource);
-              } catch (e) {
-                console.error("[Bodhi] Buffer append error:", e);
-                isAppending = false;
-              }
-            } else if (isStreamDone) {
-              if (mediaSource.readyState === "open") {
-                mediaSource.endOfStream();
-              }
-            }
+          currentAudio = audioQueue.shift()!;
+          currentAudio.onended = () => {
+            URL.revokeObjectURL(currentAudio!.src);
+            playNext();
           };
-
-          sourceBuffer.addEventListener("updateend", () => {
-            isAppending = false;
-            appendNext();
+          currentAudio.onerror = (e) => {
+            console.error("[Bodhi] Batch audio error:", e);
+            URL.revokeObjectURL(currentAudio!.src);
+            playNext();
+          };
+          currentAudio.play().catch((err) => {
+            console.error("[Bodhi] Batch play() rejected:", err);
+            URL.revokeObjectURL(currentAudio!.src);
+            playNext();
           });
+        };
 
-          audio.play().catch((err) => {
-            console.error("[Bodhi] Audio play() rejected:", err);
-            cleanup();
-          });
+        let batch: Uint8Array[] = [];
 
-          while (true) {
-            try {
-              const { done, value } = await reader.read();
-              if (done) {
-                isStreamDone = true;
-                appendNext();
-                break;
-              }
-              if (value) {
-                queue.push(value as Uint8Array);
-                appendNext();
-              }
-            } catch (err) {
-              console.error("[Bodhi] Stream read error:", err);
-              if (mediaSource.readyState === "open") {
-                mediaSource.endOfStream("network");
-              }
-              break;
+        const flushBatch = () => {
+          if (batch.length === 0) return;
+          const blob = new Blob(batch as BlobPart[], { type: "audio/mpeg" });
+          batch = [];
+
+          // Preload the audio so it decodes in the background immediately
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.preload = "auto";
+          audio.load();
+
+          if (!firstBatchPlayed) {
+            firstBatchPlayed = true;
+            console.timeEnd("[Bodhi] time-to-first-audio");
+            console.log("[Bodhi] Playing first audio batch (%d KB)", Math.round(blob.size / 1024));
+            
+            currentAudio = audio;
+            currentAudio.onended = () => {
+              URL.revokeObjectURL(currentAudio!.src);
+              playNext();
+            };
+            currentAudio.onerror = (e) => {
+              console.error("[Bodhi] First batch error:", e);
+              URL.revokeObjectURL(currentAudio!.src);
+              playNext();
+            };
+            currentAudio.play().catch((err) => {
+              console.error("[Bodhi] First batch play() rejected:", err);
+              URL.revokeObjectURL(currentAudio!.src);
+              playNext();
+            });
+          } else {
+            // Queue the already-loading audio element
+            audioQueue.push(audio);
+            // If nothing is currently playing, start
+            if (!currentAudio || currentAudio.ended) {
+              playNext();
             }
           }
-        });
+        };
 
-        // Trigger the sourceopen event
-        audio.src = url;
+        // Read stream and batch chunks
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              batch.push(value as Uint8Array);
+              if (batch.length >= BATCH_SIZE) {
+                flushBatch();
+              }
+            }
+          }
+        } catch (err) {
+          console.error("[Bodhi] Stream read error:", err);
+        }
+
+        // Flush remaining chunks
+        streamDone = true;
+        flushBatch();
+
+        // If nothing played yet (very short response), resolve
+        if (!firstBatchPlayed) {
+          console.warn("[Bodhi] No audio batches to play");
+          resolved = true;
+          resolve();
+        } else if (audioQueue.length === 0 && currentAudio && currentAudio.ended) {
+          // Queue is empty and current audio already ended
+          if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        }
       });
     },
     []
