@@ -9,3 +9,4 @@ venv/
 .cursor
 TECHNICAL.md
 bodhi.db
+*.md
