@@ -7,6 +7,7 @@ This is the public-facing UI for Bodhi, the AI mock-interview platform. It provi
 - Clerk sign-in + user profile sync
 - Mandatory resume upload modal after sign-in
 - Landing page UI with sections for features, pricing, docs, and testimonials
+- **Interview Phase Badge**: Real-time display of the active interview segment (Intro, Technical, DSA, etc.) in the session toolbar.
 - API proxy to the FastAPI backend at `http://localhost:8000`
 
 ## Local Development

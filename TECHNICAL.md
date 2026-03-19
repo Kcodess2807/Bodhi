@@ -19,7 +19,9 @@ Internal reference document. Not for external distribution.
         └─────────────┘ └────────────┘ └─────────────┘
 ```
 
-**Data flow**: User speaks → browser VAD detects speech → raw PCM encoded to WAV → sent to backend via WebSocket → Sarvam STT → LangGraph processes turn → Gemini generates reply token-by-token → Sentence accumulator catches punctuation → Sarvam TTS per sentence → audio chunks streamed back over WebSocket → auto-play → loop.
+**Data flow**: User speaks → browser VAD detects speech → raw PCM encoded to WAV → sent to backend via WebSocket → Sarvam STT → LangGraph processes turn. 
+**Streaming**: `astream_events` generates tokens. We filter for `langgraph_node="interviewer"` to prevent background LLM events (like memory compaction) from leaking into the transcript. If `[END_INTERVIEW]` is detected, the pipeline sets `should_end=True` and strips the token from voice and text outputs. 
+LangGraph processes turn → Gemini generates reply token-by-token → Sentence accumulator catches punctuation → Sarvam TTS per sentence → audio chunks streamed back over WebSocket → auto-play → loop.
 
 **Storage tiers**: MemorySaver (in-process, zero latency) → Redis (sub-ms cache for session snapshots, entity context, suggested topics, **question queues**, **phase memories**) → NeonDB PostgreSQL (permanent: sessions, transcripts, phase results, company profiles, role profiles, vector embeddings, **phase memories**, **answer scores**).
 
@@ -101,7 +103,8 @@ Phase transition (e.g., technical → behavioral):
 At session end:
   - All phase memories flushed to NeonDB (phase_memories table)
   - All answer scores flushed to NeonDB (answer_scores table)
-  - Report generated from aggregated data
+  - **Report Agent Pipeline**: Total transcript + behavioral summaries are sent to a dedicated LLM Agent (`src/agents/report_agent.py`) which synthesizes the final hiring recommendation, qualitative strengths, and cross-section insights.
+  - Final structured report is compiled from Agent+Deterministic data.
 ```
 
 ### Graph Flow (with Memory)
