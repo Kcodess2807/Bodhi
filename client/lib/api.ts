@@ -72,11 +72,33 @@ export interface UserProfileResponse {
   clerk_user_id: string;
   has_resume: boolean;
   resume_data: CandidateProfile | null;
+  resume_file_name: string | null;
   interview_history: InterviewHistoryItem[];
 }
 
 export const getUserProfile = (authToken?: string) =>
   request<UserProfileResponse>("/api/users/me/profile", undefined, authToken);
+
+export const downloadResumeBlob = async (authToken?: string) => {
+  const headers: Record<string, string> = {};
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+
+  const res = await fetch("/api/users/me/resume/download", { headers });
+  if (!res.ok) throw new Error("Failed to download resume");
+  
+  const blob = await res.blob();
+  
+  let filename = "resume.pdf";
+  const disposition = res.headers.get("Content-Disposition");
+  if (disposition && disposition.indexOf("filename=") !== -1) {
+    const filenameMatch = disposition.match(/filename="?([^"]+)"?/);
+    if (filenameMatch && filenameMatch.length === 2) {
+      filename = filenameMatch[1];
+    }
+  }
+
+  return { blob, filename };
+};
 
 // ── Roles ────────────────────────────────────────────────
 

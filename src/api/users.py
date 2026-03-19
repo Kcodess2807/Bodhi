@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from src.api.auth import require_auth
@@ -78,7 +79,20 @@ class UserProfileResponse(BaseModel):
     clerk_user_id: str
     has_resume: bool
     resume_data: dict | None = None
+    resume_file_name: str | None = None
     interview_history: list[InterviewHistoryItem]
+
+@router.get("/me/resume/download")
+async def download_resume(
+    clerk_user_id: str = Depends(require_auth),
+    storage: BodhiStorage = Depends(get_storage),
+):
+    content, filename = storage.get_user_resume_file(clerk_user_id)
+    if not content:
+        raise HTTPException(status_code=404, detail="No resume available to download.")
+    return Response(content, media_type="application/octet-stream", headers={
+        "Content-Disposition": f'attachment; filename="{filename or "resume.pdf"}"'
+    })
 
 @router.get("/me/profile", response_model=UserProfileResponse)
 async def get_full_user_profile(
@@ -95,10 +109,12 @@ async def get_full_user_profile(
 
     # Get resume profile data
     resume_data = None
+    resume_file_name = None
     if has_resume:
         full_profile = storage.get_user_profile(user_id)
         if full_profile and getattr(full_profile, "get", None):
             resume_data = full_profile.get("professional_summary")
+            resume_file_name = full_profile.get("resume_file_name")
 
     # Get interview history
     history = storage.get_user_interview_history(clerk_user_id)
@@ -107,5 +123,6 @@ async def get_full_user_profile(
         clerk_user_id=clerk_user_id,
         has_resume=has_resume,
         resume_data=resume_data,
+        resume_file_name=resume_file_name,
         interview_history=history,
     )

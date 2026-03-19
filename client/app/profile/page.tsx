@@ -6,7 +6,7 @@ import { useAuth, useUser, useClerk } from "@clerk/nextjs"
 import { useRouter } from "next/navigation"
 import Navbar from "@/components/Navbar"
 import { StatusMessage } from "@/components/ui/status-message"
-import { getUserProfile, type UserProfileResponse, uploadResume, type CandidateProfile } from "@/lib/api"
+import { getUserProfile, type UserProfileResponse, uploadResume, downloadResumeBlob } from "@/lib/api"
 import { PrimaryButton } from "@/components/ui/primary-button"
 
 export default function ProfilePage() {
@@ -23,6 +23,7 @@ export default function ProfilePage() {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState("")
   const [showUpload, setShowUpload] = useState(false)
+  const [downloadingResume, setDownloadingResume] = useState(false)
 
   useEffect(() => {
     if (isLoaded && !isSignedIn) {
@@ -77,6 +78,27 @@ export default function ProfilePage() {
       setUploadError(err instanceof Error ? err.message : "Failed to upload resume")
     } finally {
       setUploading(false)
+    }
+  }
+
+  const handleDownload = async () => {
+    try {
+      setDownloadingResume(true)
+      const token = await getToken()
+      const { blob, filename } = await downloadResumeBlob(token ?? undefined)
+      
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = filename || "resume.pdf"
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setError("Failed to download resume. It may not exist.")
+    } finally {
+      setDownloadingResume(false)
     }
   }
 
@@ -148,12 +170,23 @@ export default function ProfilePage() {
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-bold text-[#2F3037]">Resume Data</h2>
-            <button
-              onClick={() => setShowUpload(!showUpload)}
-              className="text-sm font-semibold text-[#37322F] hover:underline hover:text-[#37322F]/80 transition-colors"
-            >
-              {profile?.has_resume ? "Update Resume" : "Upload Resume"}
-            </button>
+            <div className="flex gap-4">
+              {profile?.resume_file_name && (
+                <button
+                  onClick={handleDownload}
+                  disabled={downloadingResume}
+                  className="text-sm font-semibold text-[#37322F] hover:underline hover:text-[#37322F]/80 transition-colors disabled:opacity-50"
+                >
+                  {downloadingResume ? "Downloading..." : "Download Original"}
+                </button>
+              )}
+              <button
+                onClick={() => setShowUpload(!showUpload)}
+                className="text-sm font-semibold text-[#37322F] hover:underline hover:text-[#37322F]/80 transition-colors"
+              >
+                {profile?.has_resume ? "Update Resume" : "Upload Resume"}
+              </button>
+            </div>
           </div>
 
           {showUpload && (
@@ -200,21 +233,44 @@ export default function ProfilePage() {
             </div>
           ) : (
              profile?.resume_data && (
-              <div className="rounded-2xl border border-[rgba(55,50,47,0.08)] bg-white/60 backdrop-blur-md p-7 shadow-sm space-y-5">
-                {profile.resume_data.summary && (
-                  <Field label="Professional Summary" value={profile.resume_data.summary} paragraph />
+              <div className="rounded-2xl border border-[rgba(55,50,47,0.08)] bg-white/60 backdrop-blur-md p-7 shadow-sm space-y-6">
+                <div className="grid grid-cols-2 gap-4">
+                  {profile.resume_data.primary_domain && (
+                    <Field label="Domain" value={profile.resume_data.primary_domain} />
+                  )}
+                  {profile.resume_data.seniority_level && (
+                    <Field label="Experience Level" value={profile.resume_data.seniority_level.charAt(0).toUpperCase() + profile.resume_data.seniority_level.slice(1)} />
+                  )}
+                </div>
+
+                {profile.resume_data.professional_summary && (
+                  <Field label="Professional Summary" value={profile.resume_data.professional_summary} paragraph />
                 )}
                 
-                {profile.resume_data.skills && profile.resume_data.skills.length > 0 && (
+                {profile.resume_data.technical_skills && profile.resume_data.technical_skills.length > 0 && (
                   <div>
-                    <FieldLabel>Skills</FieldLabel>
+                    <FieldLabel>Technical Skills</FieldLabel>
                     <div className="flex flex-wrap gap-2 mt-2">
-                      {profile.resume_data.skills.map((skill, i) => (
+                      {profile.resume_data.technical_skills.map((skill, i) => (
                         <span key={i} className="rounded-full bg-[rgba(55,50,47,0.06)] px-3 py-1 text-xs text-[#37322F] font-semibold border border-[rgba(55,50,47,0.05)]">
                           {skill}
                         </span>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {profile.resume_data.key_achievements && profile.resume_data.key_achievements.length > 0 && (
+                  <div>
+                    <FieldLabel>Projects & Achievements</FieldLabel>
+                    <ul className="mt-2 space-y-2">
+                      {profile.resume_data.key_achievements.map((achievement, i) => (
+                        <li key={i} className="text-[13px] text-[rgba(55,50,47,0.8)] leading-relaxed flex gap-2">
+                          <span className="text-[#37322F]/40 shadow-sm">•</span>
+                          {achievement}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
               </div>

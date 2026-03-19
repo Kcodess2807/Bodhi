@@ -232,6 +232,8 @@ class BodhiStorage:
 
             try:
                 cur.execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS clerk_user_id TEXT;")
+                cur.execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS resume_file_content BYTEA;")
+                cur.execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS resume_file_name TEXT;")
             except Exception:
                 pass
 
@@ -756,6 +758,8 @@ class BodhiStorage:
         resume_raw_text: str,
         professional_summary: dict,
         clerk_user_id: str | None = None,
+        file_bytes: bytes | None = None,
+        filename: str | None = None,
     ) -> str:
         """Store a parsed resume profile. Returns the generated user_id (UUID string)."""
         self._ensure_conn()
@@ -769,30 +773,41 @@ class BodhiStorage:
                 if row:
                     cur.execute(
                         "UPDATE user_profiles SET resume_raw_text = %s, "
-                        "professional_summary = %s, updated_at = NOW() "
+                        "professional_summary = %s, updated_at = NOW(), "
+                        "resume_file_content = COALESCE(%s, resume_file_content), "
+                        "resume_file_name = COALESCE(%s, resume_file_name) "
                         "WHERE clerk_user_id = %s",
                         (
                             resume_raw_text,
                             psycopg2.extras.Json(professional_summary),
+                            file_bytes,
+                            filename,
                             clerk_user_id,
                         ),
                     )
                     return row[0]
 
                 cur.execute(
-                    "INSERT INTO user_profiles (clerk_user_id, resume_raw_text, professional_summary) "
-                    "VALUES (%s, %s, %s) RETURNING user_id::text",
+                    "INSERT INTO user_profiles (clerk_user_id, resume_raw_text, professional_summary, resume_file_content, resume_file_name) "
+                    "VALUES (%s, %s, %s, %s, %s) RETURNING user_id::text",
                     (
                         clerk_user_id,
                         resume_raw_text,
                         psycopg2.extras.Json(professional_summary),
+                        file_bytes,
+                        filename,
                     ),
                 )
             else:
                 cur.execute(
-                    "INSERT INTO user_profiles (resume_raw_text, professional_summary) "
-                    "VALUES (%s, %s) RETURNING user_id::text",
-                    (resume_raw_text, psycopg2.extras.Json(professional_summary)),
+                    "INSERT INTO user_profiles (resume_raw_text, professional_summary, resume_file_content, resume_file_name) "
+                    "VALUES (%s, %s, %s, %s) RETURNING user_id::text",
+                    (
+                        resume_raw_text, 
+                        psycopg2.extras.Json(professional_summary),
+                        file_bytes,
+                        filename,
+                    ),
                 )
             return cur.fetchone()[0]
 
@@ -847,6 +862,23 @@ class BodhiStorage:
                 return None
             return row[0], bool(row[1])
 
+    def get_user_resume_file(self, clerk_user_id: str) -> tuple[bytes | None, str | None]:
+        """Fetch the binary resume file content and filename for a user."""
+        if not clerk_user_id:
+            return None, None
+        self._ensure_conn()
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT resume_file_content, resume_file_name FROM user_profiles WHERE clerk_user_id = %s",
+                (clerk_user_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None, None
+            # Convert memoryview from pg to bytes if present
+            content = bytes(row[0]) if row[0] else None
+            return content, row[1]
+
 
     def get_user_profile(self, user_id: str) -> dict | None:
         """Fetch a stored user profile by UUID. Returns None if not found or invalid UUID."""
@@ -859,7 +891,7 @@ class BodhiStorage:
         with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT user_id::text, clerk_user_id, resume_raw_text, professional_summary, "
-                "created_at, updated_at FROM user_profiles WHERE user_id = %s::uuid",
+                "resume_file_name, created_at, updated_at FROM user_profiles WHERE user_id = %s::uuid",
                 (user_id,),
             )
             row = cur.fetchone()

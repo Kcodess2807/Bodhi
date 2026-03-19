@@ -66,7 +66,13 @@ async def upload_resume(
     except ValueError as exc:
         raise HTTPException(422, f"Resume parsing failed: {exc}") from exc
 
-    user_id = storage.create_user_profile(raw_text, profile, clerk_user_id=clerk_user_id)
+    user_id = storage.create_user_profile(
+        raw_text, 
+        profile, 
+        clerk_user_id=clerk_user_id,
+        file_bytes=file_bytes,
+        filename=filename,
+    )
     return ResumeUploadResponse(user_id=user_id, profile=profile)
 
 

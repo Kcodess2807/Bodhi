@@ -15,13 +15,18 @@ export default function ResumeUploadModal() {
 
   const helpText = useMemo(
     () =>
-      "Why you weren’t seeing users: A user profile row was only created when a resume was uploaded. No call happened on sign-in.",
+      "Upload your resume to personalize your interview experience. We'll tailor the questions based on your background and skills. You can also skip this and add it later from your profile.",
     []
   );
 
   useEffect(() => {
     let alive = true;
     if (!isSignedIn) {
+      setOpen(false);
+      return;
+    }
+
+    if (localStorage.getItem("bodhi_skip_resume") === "true") {
       setOpen(false);
       return;
     }
@@ -48,6 +53,11 @@ export default function ResumeUploadModal() {
       alive = false;
     };
   }, [isSignedIn]);
+
+  const handleSkip = () => {
+    localStorage.setItem("bodhi_skip_resume", "true");
+    setOpen(false);
+  };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -99,13 +109,23 @@ export default function ResumeUploadModal() {
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={uploading || checking}
-            className="w-full rounded border border-white py-2.5 text-sm font-medium text-white transition hover:bg-white hover:text-black disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {uploading ? "Uploading..." : "Upload Resume"}
-          </button>
+          <div className="flex gap-3">
+            <button
+              type="submit"
+              disabled={uploading || checking}
+              className="w-full rounded border border-white bg-white text-black py-2.5 text-sm font-medium transition hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {uploading ? "Uploading..." : "Upload Resume"}
+            </button>
+            <button
+              type="button"
+              onClick={handleSkip}
+              disabled={uploading || checking}
+              className="w-full rounded border border-white/20 bg-transparent py-2.5 text-sm font-medium text-white transition hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Skip For Now
+            </button>
+          </div>
         </form>
       </div>
     </div>
