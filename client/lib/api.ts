@@ -1,6 +1,6 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-async function getAuthHeaders(initHeaders?: HeadersInit): Promise<Headers> {
+export async function getAuthHeaders(initHeaders?: HeadersInit): Promise<Headers> {
   const headers = new Headers(initHeaders);
   if (typeof window !== "undefined") {
     try {
@@ -309,7 +309,7 @@ export const prepareInterview = (data: {
   candidate_name?: string;
   company?: string;
   role?: string;
-  mode?: "standard" | "option_a" | "option_b";
+  mode?: "standard" | "option_a";
   user_id?: string;
   jd_text?: string;
   interviewer_persona?: "bodhi" | "riya";
@@ -324,7 +324,7 @@ export const startInterview = (data: {
   candidate_name?: string;
   company?: string;
   role?: string;
-  mode?: "standard" | "option_a" | "option_b";
+  mode?: "standard" | "option_a";
   user_id?: string;
   jd_text?: string;
 }) =>
@@ -401,7 +401,7 @@ export const startInterviewStream = async (data: {
   candidate_name?: string;
   company?: string;
   role?: string;
-  mode?: "standard" | "option_a" | "option_b";
+  mode?: "standard" | "option_a";
   user_id?: string;
   jd_text?: string;
   interviewer_persona?: "bodhi" | "riya";

@@ -25,7 +25,7 @@ export interface InterviewFormData {
   candidate_name: string
   company: string
   role: string
-  mode: "standard" | "option_a" | "option_b"
+  mode: "standard" | "option_a"
   user_id: string
   jd_text: string
 }
@@ -66,7 +66,7 @@ export function InterviewSetupFormMultiStep({
     jd_text: "",
   })
 
-  const totalSteps = form.mode === "option_b" ? 3 : 2
+  const totalSteps = 2
 
   const handleNext = () => {
     // Validation for each step
@@ -75,7 +75,7 @@ export function InterviewSetupFormMultiStep({
         setError("Please select an interview mode")
         return
       }
-      if (form.mode !== "standard" && !form.user_id) {
+      if (form.mode === "option_a" && !form.user_id) {
         setError("Please upload your resume to continue")
         return
       }
@@ -92,12 +92,7 @@ export function InterviewSetupFormMultiStep({
       }
     }
 
-    if (currentStep === 3 && form.mode === "option_b") {
-      if (!form.jd_text) {
-        setError("Please paste the job description")
-        return
-      }
-    }
+
 
     setError("")
 
@@ -169,7 +164,7 @@ export function InterviewSetupFormMultiStep({
                 onValueChange={(value) => {
                   setForm({
                     ...form,
-                    mode: value as "standard" | "option_a" | "option_b",
+                    mode: value as "standard" | "option_a",
                   })
                   setUploadedProfile(null)
                   setError("")
@@ -180,14 +175,13 @@ export function InterviewSetupFormMultiStep({
                   <SelectValue placeholder="Select interview mode..." />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="standard">Standard (Company-based)</SelectItem>
+                  <SelectItem value="standard">Company-Based</SelectItem>
                   <SelectItem value="option_a">Resume-Based</SelectItem>
-                  <SelectItem value="option_b">JD-Targeted</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
-            {form.mode !== "standard" && !form.user_id && (
+            {form.mode === "option_a" && !form.user_id && (
               <div className="space-y-2 animate-fade-in-up">
                 <div className="flex items-center gap-2">
                   <Label htmlFor="resume">Upload Resume</Label>
@@ -209,12 +203,12 @@ export function InterviewSetupFormMultiStep({
               </div>
             )}
 
-            {form.mode !== "standard" && uploadedProfile && (
-              <Alert className="border-green-500/50 bg-green-500/10">
+            {form.mode === "option_a" && uploadedProfile && (
+              <Alert className="border-[rgba(55,50,47,0.15)] bg-[#F7F5F3]">
                 <AlertDescription>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium text-green-700 dark:text-green-400">
+                      <p className="text-sm font-medium text-[#37322F]">
                         Resume uploaded successfully
                       </p>
                       <button
@@ -326,31 +320,8 @@ export function InterviewSetupFormMultiStep({
           </div>
         )}
 
-        {/* Step 3: Job Description (only for option_b) */}
-        {currentStep === 3 && form.mode === "option_b" && (
-          <div className="space-y-6">
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="jd">Job Description</Label>
-                <TooltipIcon text="Paste the complete job description to tailor the interview" />
-              </div>
-              <textarea
-                id="jd"
-                placeholder="Paste the full job description here..."
-                value={form.jd_text}
-                onChange={(e) => setForm({ ...form, jd_text: e.target.value })}
-                className="flex min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
-              />
-            </div>
+        {/* Step 2 no longer has a step 3 for JD - JD is optional in company/standard step 2 */}
 
-            {error && (
-              <Alert variant="destructive">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-          </div>
-        )}
       </MultiStepForm>
     </div>
   )

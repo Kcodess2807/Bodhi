@@ -221,15 +221,7 @@ export default function ResumesPage() {
                       transition-all duration-200 hover:from-[#2A2624] hover:to-[#1F1C1A] hover:shadow-[0px_6px_20px_rgba(55,50,47,0.3)]
                       hover:scale-[1.02] active:scale-[0.98]"
                   >
-                    Resume-Based Interview →
-                  </Link>
-                  <Link
-                    href={`/interview?mode=option_b&user_id=${userId}`}
-                    className="flex-1 rounded-xl border-2 border-[rgba(55,50,47,0.15)] bg-white py-3.5 text-center text-sm font-semibold text-[#37322F]
-                      transition-all duration-200 hover:border-[rgba(55,50,47,0.25)] hover:shadow-[0px_4px_16px_rgba(55,50,47,0.12)]
-                      hover:scale-[1.02] active:scale-[0.98]"
-                  >
-                    JD-Targeted Interview →
+                    Start Resume-Based Interview →
                   </Link>
                 </div>
               )}
@@ -389,15 +381,7 @@ export default function ResumesPage() {
                   transition-all duration-200 hover:from-[#2A2624] hover:to-[#1F1C1A] hover:shadow-[0px_6px_20px_rgba(55,50,47,0.3)]
                   hover:scale-[1.02] active:scale-[0.98]"
               >
-                Resume-Based Interview →
-              </Link>
-              <Link
-                href={`/interview?mode=option_b&user_id=${result.user_id}`}
-                className="flex-1 rounded-xl border-2 border-[rgba(55,50,47,0.15)] bg-white py-3.5 text-center text-sm font-semibold text-[#37322F]
-                  transition-all duration-200 hover:border-[rgba(55,50,47,0.25)] hover:shadow-[0px_4px_16px_rgba(55,50,47,0.12)]
-                  hover:scale-[1.02] active:scale-[0.98]"
-              >
-                JD-Targeted Interview →
+                Start Resume-Based Interview →
               </Link>
             </div>
           </div>
