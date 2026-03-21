@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { useUser } from "@clerk/nextjs"
 import { FormInput } from "@/components/ui/form-input"
 import { PrimaryButton } from "@/components/ui/primary-button"
-import { type CandidateProfile, uploadResume } from "@/lib/api"
+import { type CandidateProfile, type CompanyProfile, uploadResume } from "@/lib/api"
 
 interface InterviewSetupFormProps {
   onSubmit: (formData: InterviewFormData) => void
@@ -15,6 +15,7 @@ export interface InterviewFormData {
   candidate_name: string
   company: string
   role: string
+  experience_level: string
   mode: "standard" | "option_a" | "option_b"
   user_id: string
   jd_text: string
@@ -30,10 +31,19 @@ export function InterviewSetupForm({ onSubmit, loading }: InterviewSetupFormProp
   const [selectedMode, setSelectedMode] = useState<"company" | "resume">("company")
   const [showJdField, setShowJdField] = useState(false)
 
+  const [companies, setCompanies] = useState<CompanyProfile[]>([])
+
+  useEffect(() => {
+    import("@/lib/api").then(api => {
+      api.listCompanies().then(setCompanies).catch(console.error)
+    })
+  }, [])
+
   const [form, setForm] = useState<InterviewFormData>({
     candidate_name: "",
     company: "",
     role: "Software Engineer",
+    experience_level: "Mid-Level",
     mode: "standard",
     user_id: "",
     jd_text: "",
@@ -367,18 +377,55 @@ export function InterviewSetupForm({ onSubmit, loading }: InterviewSetupFormProp
       {/* ── Company & Role Fields (Company mode only) ───── */}
       {selectedMode === "company" && (
         <>
-          <FormInput
-            placeholder="Company *"
-            required
-            value={form.company}
-            onChange={(e) => setForm({ ...form, company: e.target.value })}
-          />
+          <div className="space-y-1">
+            <select
+              required
+              value={form.company}
+              onChange={(e) => {
+                 const selected = e.target.value;
+                 setForm(prev => {
+                    const newState = { ...prev, company: selected };
+                    const comp = companies.find(c => c.company_name === selected);
+                    if (comp) {
+                       newState.role = comp.role;
+                       if (comp.experience_level) newState.experience_level = comp.experience_level;
+                    }
+                    return newState;
+                 });
+              }}
+              className="w-full rounded-xl border border-[rgba(55,50,47,0.15)] bg-[#F7F5F3] px-3 py-3 text-sm text-[#37322F] focus:outline-none focus:ring-2 focus:ring-[rgba(55,50,47,0.15)] transition"
+            >
+              <option value="" disabled>Select a Company *</option>
+              {Array.from(new Set(companies.map(c => c.company_name))).map(cName => (
+                <option key={cName} value={cName}>{cName}</option>
+              ))}
+            </select>
+            {companies.length === 0 && (
+              <p className="text-xs text-[rgba(55,50,47,0.5)] mt-1">
+                No companies found. Create one in the Companies tab.
+              </p>
+            )}
+          </div>
           <FormInput
             placeholder="Role *"
             required
             value={form.role}
             onChange={(e) => setForm({ ...form, role: e.target.value })}
           />
+          <div className="space-y-1">
+            <select
+              required
+              value={form.experience_level}
+              onChange={(e) => setForm({ ...form, experience_level: e.target.value })}
+              className="w-full rounded-xl border border-[rgba(55,50,47,0.15)] bg-[#F7F5F3] px-3 py-3 text-sm text-[#37322F] focus:outline-none focus:ring-2 focus:ring-[rgba(55,50,47,0.15)] transition"
+            >
+              <option value="" disabled>Select Experience Level *</option>
+              <option value="Intern">Intern</option>
+              <option value="Junior">Junior</option>
+              <option value="Mid-Level">Mid-Level</option>
+              <option value="Senior">Senior</option>
+            </select>
+          </div>
 
           {/* Optional JD toggle + textarea */}
           {!showJdField ? (

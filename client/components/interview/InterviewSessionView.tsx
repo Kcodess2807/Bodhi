@@ -13,6 +13,16 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { cn } from "@/lib/utils"
 
 interface Turn {
@@ -64,6 +74,9 @@ export function InterviewSessionView({
 }: InterviewSessionViewProps) {
   const [isMicOn, setIsMicOn] = useState(true)
   const [editorContent, setEditorContent] = useState("")
+  const [showEndConfirm, setShowEndConfirm] = useState(false)
+
+  const isTechnicalPhase = interviewPhase === "technical"
   
   const handleEditorChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const content = e.target.value
@@ -112,7 +125,7 @@ export function InterviewSessionView({
           <Button 
             variant="outline" 
             size="sm" 
-            onClick={onEndSession}
+            onClick={() => setShowEndConfirm(true)}
             className="text-[#DC2626] border-[#DC2626]/30 hover:bg-[#DC2626]/10 font-sans font-medium"
           >
             End Session
@@ -227,44 +240,45 @@ export function InterviewSessionView({
           </div>
         </div>
 
-        {/* Center Canvas/Editor - IDE Style (Monokai Theme) */}
-        <div className="flex-1 relative bg-[#272822] flex flex-col">
-          {/* IDE Toolbar */}
-          <div className="h-10 bg-[#1e1e1e] border-b border-[#1a1a1a] flex items-center px-4 gap-2">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-[#FF5F56]"></div>
-              <div className="w-3 h-3 rounded-full bg-[#FFBD2E]"></div>
-              <div className="w-3 h-3 rounded-full bg-[#27C93F]"></div>
-            </div>
-            <div className="flex-1 flex items-center gap-2 ml-4">
-              <div className="px-3 py-1 bg-[#3e3d32] rounded text-xs text-[#f8f8f2] font-mono border border-[#1a1a1a] shadow-sm">
-                interview-notes.md
+        {/* Center Canvas/Editor - IDE Style (Monokai Theme) - Only visible in technical phase */}
+        {isTechnicalPhase && (
+          <div className="flex-1 relative bg-[#272822] flex flex-col">
+            {/* IDE Toolbar */}
+            <div className="h-10 bg-[#1e1e1e] border-b border-[#1a1a1a] flex items-center px-4 gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-[#FF5F56]"></div>
+                <div className="w-3 h-3 rounded-full bg-[#FFBD2E]"></div>
+                <div className="w-3 h-3 rounded-full bg-[#27C93F]"></div>
+              </div>
+              <div className="flex-1 flex items-center gap-2 ml-4">
+                <div className="px-3 py-1 bg-[#3e3d32] rounded text-xs text-[#f8f8f2] font-mono border border-[#1a1a1a] shadow-sm">
+                  interview-notes.md
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-[#75715e]">
+                <button className="hover:bg-[#3e3d32] p-1 rounded transition-colors">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                </button>
               </div>
             </div>
-            <div className="flex items-center gap-2 text-[#75715e]">
-              <button className="hover:bg-[#3e3d32] p-1 rounded transition-colors">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-              </button>
-            </div>
-          </div>
 
-          {/* IDE Editor Area */}
-          <div className="flex-1 flex overflow-hidden">
-            {/* Line Numbers */}
-            <div className="w-12 bg-[#272822] border-r border-[#3e3d32] py-3 text-right pr-3 font-mono text-xs text-[#75715e] select-none">
-              {Array.from({ length: 30 }, (_, i) => (
-                <div key={i} className="leading-6">{i + 1}</div>
-              ))}
-            </div>
+            {/* IDE Editor Area */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Line Numbers */}
+              <div className="w-12 bg-[#272822] border-r border-[#3e3d32] py-3 text-right pr-3 font-mono text-xs text-[#75715e] select-none">
+                {Array.from({ length: 30 }, (_, i) => (
+                  <div key={i} className="leading-6">{i + 1}</div>
+                ))}
+              </div>
 
-            {/* Editor Content */}
-            <div className="flex-1 relative bg-[#272822]">
-              <Textarea
-                value={editorContent}
-                onChange={handleEditorChange}
-                placeholder="# Interview Notes
+              {/* Editor Content */}
+              <div className="flex-1 relative bg-[#272822]">
+                <Textarea
+                  value={editorContent}
+                  onChange={handleEditorChange}
+                  placeholder="# Interview Notes
 
 ## Key Points
 - 
@@ -277,74 +291,37 @@ export function InterviewSessionView({
 
 ## Follow-up Items
 - "
-                className="w-full h-full bg-transparent border-0 text-[#f8f8f2] placeholder:text-[#75715e] resize-none font-mono text-sm p-3 leading-6 focus:outline-none focus:ring-0"
-                style={{ 
-                  caretColor: '#f8f8f2',
-                  lineHeight: '1.5rem'
-                }}
-              />
+                  className="w-full h-full bg-transparent border-0 text-[#f8f8f2] placeholder:text-[#75715e] resize-none font-mono text-sm p-3 leading-6 focus:outline-none focus:ring-0"
+                  style={{ 
+                    caretColor: '#f8f8f2',
+                    lineHeight: '1.5rem'
+                  }}
+                />
+              </div>
             </div>
-          </div>
 
-          {/* Floating Live Captions - Above buttons */}
-          <div className="absolute bottom-28 left-1/2 -translate-x-1/2 w-full max-w-2xl px-6 z-30">
-            <div className="bg-black/80 backdrop-blur-md rounded-xl px-4 py-3 shadow-[0px_8px_24px_rgba(0,0,0,0.4)] border border-white/10">
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
-                  </span>
-                  <span className="text-xs font-medium text-white/60 font-sans">Live</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-white font-sans">
-                    {currentTranscript?.text || "Waiting for audio..."}
-                  </p>
-                </div>
+            {/* IDE Status Bar */}
+            <div className="h-6 bg-[#37322F] flex items-center px-4 text-xs text-white font-sans">
+              <div className="flex items-center gap-4">
+                <span>Markdown</span>
+                <span>UTF-8</span>
+                <span>Ln {editorContent.split('\n').length}, Col 1</span>
               </div>
             </div>
           </div>
+        )}
 
-          {/* Bottom Action Buttons */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 z-20">
-            <Button
-              variant={isMicOn ? "outline" : "destructive"}
-              size="icon"
-              className={cn(
-                "rounded-full w-16 h-16 shadow-[0px_8px_24px_rgba(0,0,0,0.3)] transition-all hover:scale-105",
-                isMicOn 
-                  ? "bg-white/95 backdrop-blur-sm border-white/20 text-[#1E1E1E] hover:bg-white" 
-                  : "bg-red-600 hover:bg-red-700 border-0"
-              )}
-              onClick={() => setIsMicOn(!isMicOn)}
-            >
-              {isMicOn ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6 text-white" />}
-            </Button>
-            <Button
-              variant="destructive"
-              size="icon"
-              className="rounded-full w-16 h-16 bg-red-600 hover:bg-red-700 shadow-[0px_8px_24px_rgba(220,38,38,0.4)] transition-all hover:scale-105 border-0"
-              onClick={onEndSession}
-            >
-              <PhoneOff className="w-6 h-6 text-white" />
-            </Button>
-          </div>
 
-          {/* IDE Status Bar */}
-          <div className="h-6 bg-[#37322F] flex items-center px-4 text-xs text-white font-sans">
-            <div className="flex items-center gap-4">
-              <span>Markdown</span>
-              <span>UTF-8</span>
-              <span>Ln {editorContent.split('\n').length}, Col 1</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Sidebar - Participants (38% width) */}
-        <div className="w-[38%] border-l border-[rgba(55,50,47,0.10)] bg-white flex flex-col">
+        {/* Right Sidebar - Participants (38% when editor visible, flex-1 otherwise) */}
+        <div className={cn(
+          "border-l border-[rgba(55,50,47,0.10)] bg-white flex relative",
+          isTechnicalPhase ? "w-[38%] flex-col" : "flex-1 flex-row"
+        )}>
           {/* AI Interviewer */}
-          <div className="flex-1 flex flex-col items-center justify-center p-6 border-b border-[rgba(55,50,47,0.10)] relative bg-gradient-to-br from-[#FAFAFA] to-[#F7F5F3]">
+          <div className={cn(
+            "flex-1 flex flex-col items-center justify-center p-6 relative bg-gradient-to-br from-[#FAFAFA] to-[#F7F5F3]",
+            isTechnicalPhase ? "border-b border-[rgba(55,50,47,0.10)]" : "border-r border-[rgba(55,50,47,0.10)]"
+          )}>
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="relative">
                 {/* Siri-like Animated Rings - Show when speaking OR processing (after first message) */}
@@ -464,6 +441,81 @@ export function InterviewSessionView({
           </div>
         </div>
       </div>
+
+      {/* Floating Live Captions + Action Buttons (Fixed to viewport center) */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center pointer-events-none">
+        {/* Live Captions */}
+        <div className="w-[400px] mb-4 pointer-events-auto">
+          <div className="bg-black/80 backdrop-blur-md rounded-xl px-4 py-3 shadow-[0px_8px_24px_rgba(0,0,0,0.4)] border border-white/10">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+                </span>
+                <span className="text-xs font-medium text-white/60 font-sans">Live</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-white font-sans">
+                  {currentTranscript?.text || "Waiting for audio..."}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center gap-4 pointer-events-auto">
+          <Button
+            variant={isMicOn ? "outline" : "destructive"}
+            size="icon"
+            className={cn(
+              "rounded-full w-16 h-16 shadow-[0px_8px_24px_rgba(0,0,0,0.4)] transition-all hover:scale-105",
+              isMicOn 
+                ? "bg-white/95 backdrop-blur-sm border-white/20 text-[#1E1E1E] hover:bg-white" 
+                : "bg-red-600 hover:bg-red-700 border-0"
+            )}
+            onClick={() => setIsMicOn(!isMicOn)}
+          >
+            {isMicOn ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6 text-white" />}
+          </Button>
+          <Button
+            variant="destructive"
+            size="icon"
+            className="rounded-full w-16 h-16 bg-red-600 hover:bg-red-700 shadow-[0px_8px_24px_rgba(220,38,38,0.4)] transition-all hover:scale-105 border-0"
+            onClick={() => setShowEndConfirm(true)}
+          >
+            <PhoneOff className="w-6 h-6 text-white" />
+          </Button>
+        </div>
+      </div>
+
+
+      {/* End Session Confirmation Dialog */}
+      <AlertDialog open={showEndConfirm} onOpenChange={setShowEndConfirm}>
+        <AlertDialogContent className="bg-white border border-[rgba(55,50,47,0.12)] shadow-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-[#2F3037] font-sans text-lg">
+              End Interview Session?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-[rgba(55,50,47,0.6)] font-sans">
+              Are you sure you want to end this interview? This action cannot be undone and you will lose any unsaved progress. Your responses so far will be used to generate your report.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="font-sans">Continue Interview</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setShowEndConfirm(false)
+                onEndSession()
+              }}
+              className="bg-red-600 hover:bg-red-700 text-white font-sans"
+            >
+              End Session
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

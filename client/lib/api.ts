@@ -75,6 +75,7 @@ export interface UserProfileResponse {
   resume_file_name: string | null;
   interview_history: InterviewHistoryItem[];
   full_name: string | null;
+  experience_level: string | null;
 }
 
 export const getUserProfile = (authToken?: string) =>
@@ -136,6 +137,7 @@ export interface CompanyProfile {
   id: number;
   company_name: string;
   role: string;
+  experience_level: string;
   description: string | null;
   hiring_patterns: string | null;
   tech_stack: string | null;
@@ -149,6 +151,7 @@ export const listCompanies = () => request<CompanyProfile[]>("/api/companies");
 export const createCompany = (data: {
   company_name: string;
   role?: string;
+  experience_level?: string;
   description?: string;
   hiring_patterns?: string;
   tech_stack?: string;
@@ -159,9 +162,9 @@ export const createCompany = (data: {
     body: JSON.stringify(data),
   });
 
-export const deleteCompany = (name: string, role: string) =>
+export const deleteCompany = (name: string, role: string, experience_level: string) =>
   request<void>(
-    `/api/companies/${encodeURIComponent(name)}/${encodeURIComponent(role)}`,
+    `/api/companies/${encodeURIComponent(name)}/${encodeURIComponent(role)}/${encodeURIComponent(experience_level)}`,
     { method: "DELETE" }
   );
 
@@ -310,6 +313,7 @@ export const prepareInterview = (data: {
   candidate_name?: string;
   company?: string;
   role?: string;
+  experience_level?: string;
   mode?: "standard" | "option_a";
   user_id?: string;
   jd_text?: string;
@@ -325,6 +329,7 @@ export const startInterview = (data: {
   candidate_name?: string;
   company?: string;
   role?: string;
+  experience_level?: string;
   mode?: "standard" | "option_a";
   user_id?: string;
   jd_text?: string;
@@ -402,6 +407,7 @@ export const startInterviewStream = async (data: {
   candidate_name?: string;
   company?: string;
   role?: string;
+  experience_level?: string;
   mode?: "standard" | "option_a";
   user_id?: string;
   jd_text?: string;

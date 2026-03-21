@@ -103,6 +103,7 @@ export default function InterviewPage() {
         candidate_name: "Demo User",
         company: "GrowthX",
         role: "Software Engineer",
+        experience_level: "Mid-Level",
         mode: "standard",
         user_id: "",
         jd_text: "",
@@ -114,6 +115,7 @@ export default function InterviewPage() {
           candidate_name: "Demo User",
           company: "GrowthX",
           role: "Software Engineer",
+          experience_level: "Mid-Level",
           mode: "standard",
           user_id: "",
           jd_text: "",
@@ -126,6 +128,7 @@ export default function InterviewPage() {
           candidate_name: "",
           company: "",
           role: "Software Engineer",
+          experience_level: "Mid-Level",
           mode: "standard",
           user_id: "",
           jd_text: "",
@@ -357,7 +360,6 @@ export default function InterviewPage() {
   if (phase === "processing" && transcript.length === 0) {
     return (
       <div className="min-h-screen bg-[#F7F5F3] flex items-center justify-center relative overflow-hidden">
-        {/* Animated Grid Background */}
         <div className="absolute inset-0 opacity-[0.03] pointer-events-none">
           <div
             className="absolute inset-0"
@@ -371,33 +373,18 @@ export default function InterviewPage() {
           />
         </div>
 
-        {/* Gradient Orbs */}
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-[#E8E3DF] rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float" />
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-[#DED9D5] rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float" style={{ animationDelay: "2s" }} />
-
-        <div className="text-center space-y-6 px-4">
-          <div className="relative">
-            <div className="h-20 w-20 mx-auto">
-              <div className="absolute inset-0 rounded-full border-4 border-[#E5E3E0] animate-pulse" />
-              <div className="absolute inset-0 rounded-full border-4 border-[#37322F] border-t-transparent animate-spin" />
-            </div>
+        <div className="text-center space-y-6 px-4 z-10">
+          <div className="flex justify-center">
+            <div className="w-12 h-12 rounded-full border-4 border-[#37322F]/10 border-t-[#37322F] animate-spin" />
           </div>
           <div className="space-y-2">
-            <h2 className="text-2xl font-semibold text-[#37322F]">
-              {demoMode ? `Preparing ${demoPhase} demo...` : "Setting up your interview..."}
+            <h2 className="text-xl font-semibold text-[#37322F]">
+              Loading expected environment...
             </h2>
-            <p className="text-sm text-[#6B6662]">
-              {proctoring.cameraAvailable 
-                ? "Initializing camera, microphone, and AI interviewer"
-                : "Initializing microphone and AI interviewer (voice-only mode)"}
+            <p className="text-sm text-[rgba(55,50,47,0.6)]">
+              {demoMode ? `Preparing ${demoPhase} demo` : "Initializing your session"}
             </p>
           </div>
-          {demoMode && (
-            <div className="inline-flex items-center gap-2 rounded-full bg-blue-100 px-4 py-2 text-sm font-medium text-blue-700">
-              <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-              Demo Mode
-            </div>
-          )}
         </div>
       </div>
     )
