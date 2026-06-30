@@ -1,0 +1,31 @@
+# Self-contained image for Hugging Face Spaces: API + Redis in one container.
+FROM python:3.10-slim
+
+# redis-server + runtime libs for opencv-headless and soundfile.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    redis-server \
+    libglib2.0-0 \
+    libgomp1 \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.hf.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ ./src/
+COPY start.sh ./start.sh
+# Strip CRLF (authored on Windows) so the shebang works, then make executable.
+RUN sed -i 's/\r$//' start.sh && chmod +x start.sh
+
+# HF runs containers as uid 1000.
+RUN useradd -m -u 1000 bodhi && chown -R bodhi:bodhi /app
+USER bodhi
+
+ENV REDIS_URL=redis://127.0.0.1:6379 \
+    PROCTORING_ENABLED=false \
+    HF_HOME=/app/.cache
+
+EXPOSE 7860
+CMD ["./start.sh"]

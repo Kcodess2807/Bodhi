@@ -1,0 +1,42 @@
+# Slim requirements for the self-contained Hugging Face Space image.
+# Server-side CV/behavioral models are dropped (proctoring runs in the browser);
+# keep only the web/LLM/voice stack plus opencv-headless + numpy.
+
+# LLM + orchestration
+sarvamai>=0.1.0
+langchain>=0.3.0
+langchain-google-genai>=2.0.0
+langgraph>=0.2.0
+langgraph-checkpoint-postgres>=2.0.0
+psycopg[binary,pool]>=3.1.0
+python-dotenv>=1.0.0
+
+# Live voice pipeline (Deepgram STT + Sarvam TTS WebSockets)
+websockets>=12.0
+soundfile>=0.12.1
+numpy>=1.24.0
+
+# Storage
+psycopg2-binary>=2.9.0
+redis>=5.0.0
+pgvector>=0.3.0
+
+# FastAPI server + document parsing
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+gunicorn>=22.0.0
+python-multipart>=0.0.9
+PyPDF2>=3.0.0
+python-docx>=1.1.0
+
+# cv2 is imported at module load by the proctoring router (headless = no GUI libs)
+opencv-python-headless>=4.8.0
+
+# Rate limiting + auth
+slowapi>=0.1.9
+pyjwt[crypto]>=2.8.0
+
+# Misc
+pydantic-settings>=2.0.0
+loguru>=0.7.0
+reportlab>=4.0.0
